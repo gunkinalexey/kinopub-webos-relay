@@ -3,6 +3,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -126,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.60', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.66', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -167,6 +168,7 @@ class ProgressPayload(BaseModel):
 
 class AudioHlsPayload(BaseModel):
     url: str
+    # Zero-based position inside media.audios, not KinoPub's audios[].index.
     track: int
     start: float = 0
 
@@ -488,6 +490,94 @@ def stream_from_file(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
     return result
 
 
+def merge_unique_list(target: List[Any], incoming: Any, key_builder) -> List[Any]:
+    """Append entries from ``incoming`` that ``target`` does not already contain."""
+    if not isinstance(incoming, list):
+        return target
+    known = {key_builder(value) for value in target}
+    for value in incoming:
+        marker = key_builder(value)
+        if marker not in known:
+            target.append(value)
+            known.add(marker)
+    return target
+
+
+def stream_key(value: Any) -> str:
+    if not isinstance(value, dict):
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+    return '|'.join(str(value.get(name) or '') for name in ('url', 'file', 'source_type', 'quality', 'height', 'codec'))
+
+
+def audio_key(value: Any) -> str:
+    if not isinstance(value, dict):
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+    # ID is the most stable key; index is the position KinoPub assigns to the
+    # track inside the file. Include both because either one can be absent.
+    return '|'.join(str(value.get(name) or '') for name in ('id', 'index', 'track_index', 'stream_index', 'lang'))
+
+
+def subtitle_key(value: Any) -> str:
+    if not isinstance(value, dict):
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+    return '|'.join(str(value.get(name) or '') for name in ('url', 'file', 'lang', 'shift', 'embed'))
+
+
+def track_numbers(value: Any) -> List[str]:
+    if isinstance(value, list):
+        raw_values: List[Any] = list(value)
+    elif value is None:
+        raw_values = []
+    else:
+        raw_values = re.split(r'[^0-9]+', str(value))
+    result: List[str] = []
+    for raw_value in raw_values:
+        try:
+            number = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if number > 0 and str(number) not in result:
+            result.append(str(number))
+    return result
+
+
+def expected_track_count(value: Any) -> int:
+    """Number of audio tracks KinoPub claims the media has.
+
+    ``tracks`` is a plain count in most payloads and a list of track numbers in
+    a few. Either way it is only a hint used to detect a truncated ``audios``
+    list, never to hide entries the API did return.
+    """
+    if isinstance(value, list):
+        return len(value)
+    if isinstance(value, bool) or value is None:
+        return 0
+    try:
+        return max(0, int(str(value).strip()))
+    except (TypeError, ValueError):
+        return len(track_numbers(value))
+
+
+def sorted_audios(audios: Any) -> List[Any]:
+    """Order audio entries the way FFmpeg sees them inside the file.
+
+    The player selects a track by its *position* in this list (``0:a:N``), so
+    the order must match the file. KinoPub numbers tracks in ``index``; entries
+    without one keep their original relative position at the end.
+    """
+    if not isinstance(audios, list):
+        return []
+    decorated = []
+    for position, entry in enumerate(audios):
+        raw = entry.get('index') if isinstance(entry, dict) else None
+        try:
+            decorated.append(((0, int(raw), position), entry))
+        except (TypeError, ValueError):
+            decorated.append(((1, 0, position), entry))
+    decorated.sort(key=lambda pair: pair[0])
+    return [entry for _, entry in decorated]
+
+
 def collect_media(payload: Any) -> List[Dict[str, Any]]:
     media: List[Dict[str, Any]] = []
     def walk(value: Any, context: Dict[str, Any], key: str = '') -> None:
@@ -534,48 +624,6 @@ def collect_media(payload: Any) -> List[Dict[str, Any]]:
     by_id: Dict[str, Dict[str, Any]] = {}
     out: List[Dict[str, Any]] = []
 
-    def merge_unique_list(target: List[Any], incoming: List[Any], key_builder) -> None:
-        known = {key_builder(value) for value in target}
-        for value in incoming:
-            marker = key_builder(value)
-            if marker not in known:
-                target.append(value)
-                known.add(marker)
-
-    def stream_key(value: Any) -> str:
-        if not isinstance(value, dict):
-            return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
-        return '|'.join(str(value.get(name) or '') for name in ('url', 'file', 'source_type', 'quality', 'height', 'codec'))
-
-    def audio_key(value: Any) -> str:
-        if not isinstance(value, dict):
-            return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
-        # ID is the most stable key; index is the FFmpeg stream number used by
-        # the player. Include both because either one can be absent.
-        return '|'.join(str(value.get(name) or '') for name in ('id', 'index', 'track_index', 'stream_index', 'lang'))
-
-    def subtitle_key(value: Any) -> str:
-        if not isinstance(value, dict):
-            return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
-        return '|'.join(str(value.get(name) or '') for name in ('url', 'file', 'lang', 'shift', 'embed'))
-
-    def track_numbers(value: Any) -> List[str]:
-        if isinstance(value, list):
-            raw_values = value
-        elif value is None:
-            raw_values = []
-        else:
-            raw_values = re.split(r'[^0-9]+', str(value))
-        result: List[str] = []
-        for raw_value in raw_values:
-            try:
-                number = int(raw_value)
-            except (TypeError, ValueError):
-                continue
-            if number > 0 and str(number) not in result:
-                result.append(str(number))
-        return result
-
     for item in media:
         key = item['id']
         existing = by_id.get(key)
@@ -603,6 +651,8 @@ def collect_media(payload: Any) -> List[Dict[str, Any]]:
             if not existing.get(field) and item.get(field):
                 existing[field] = item[field]
 
+    for entry in out:
+        entry['audios'] = sorted_audios(entry.get('audios'))
     return out
 
 
@@ -634,29 +684,6 @@ async def kino_get(session: Dict[str, Any], path: str, params: Optional[Dict[str
         return response.json()
     except ValueError as exc:
         raise HTTPException(502, 'KinoPub API returned invalid JSON') from exc
-
-
-@app.get('/catalog/home')
-async def catalog_home(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
-    requests = [
-        ('popular', 'Популярные', 'v1/items/popular', {'type': 'movie', 'page': 0, 'perpage': 30}),
-        ('fresh', 'Свежие', 'v1/items/fresh', {'type': 'movie', 'page': 0, 'perpage': 30}),
-        ('hot', 'Горячие', 'v1/items/hot', {'type': 'movie', 'page': 0, 'perpage': 30}),
-        ('series', 'Сериалы', 'v1/items/fresh', {'type': 'serial', 'page': 0, 'perpage': 30}),
-    ]
-    rows = []
-    for row_id, title, path, params in requests:
-        try:
-            payload = await kino_get(session, path, params)
-            items = extract_catalog_items(payload)
-            rows.append({'id': row_id, 'title': title, 'items': items})
-        except HTTPException as exc:
-            log_event('catalog', f'Could not load {row_id}', {'status': exc.status_code})
-            rows.append({'id': row_id, 'title': title, 'items': []})
-    hero = next((item for row in rows for item in row['items']), None)
-    return {'hero': hero, 'rows': rows}
-
 
 
 CATALOG_SECTION_TYPES = {
@@ -705,35 +732,8 @@ async def catalog_list(section: str = 'movie', feed: str = 'fresh', page: int = 
     log_event('catalog', 'Catalogue section loaded', {
         'section': section, 'api_type': api_type, 'feed': feed, 'page': page, 'api_page': api_page, 'count': len(items)
     })
-    pagination = payload.get('pagination') if isinstance(payload, dict) and isinstance(payload.get('pagination'), dict) else {}
-    if not pagination and isinstance(payload, dict):
-        pagination = payload.get('meta') if isinstance(payload.get('meta'), dict) else {}
-
-    def first_int(*values):
-        for value in values:
-            try:
-                if value is not None and str(value) != '':
-                    return int(value)
-            except (TypeError, ValueError):
-                pass
-        return 0
-
-    # KinoPub uses pagination.total as the number of pages. The item count,
-    # when present, is exposed separately as total_count / total_items.
-    total_pages = first_int(
-        pagination.get('total'), pagination.get('pages'), pagination.get('total_pages'),
-        pagination.get('page_count'), pagination.get('last_page'),
-        payload.get('pages') if isinstance(payload, dict) else None,
-        payload.get('total_pages') if isinstance(payload, dict) else None,
-    )
-    total_items = first_int(
-        pagination.get('total_count'), pagination.get('total_items'), pagination.get('items_count'),
-        payload.get('total_count') if isinstance(payload, dict) else None,
-        payload.get('total_items') if isinstance(payload, dict) else None,
-    )
-    if not total_items and total_pages:
-        # This is an upper-bound estimate until the final page is loaded.
-        total_items = total_pages * perpage
+    totals = _pagination_values(payload, perpage)
+    total_pages, total_items = totals['total_pages'], totals['total_items']
     # A full page is evidence that a following page may exist. Some KinoPub
     # shortcut responses omit totals or expose stale/ambiguous pagination data.
     has_next = (page + 1 < total_pages) if total_pages > 1 else (len(items) >= perpage)
@@ -755,32 +755,39 @@ def _page_count_cache_key(section: str, feed: str, perpage: int) -> str:
     return f"{section}:{feed}:{perpage}"
 
 
+def _first_int(*values: Any) -> int:
+    for value in values:
+        try:
+            if value is not None and str(value) != '':
+                return int(value)
+        except (TypeError, ValueError):
+            pass
+    return 0
+
+
 def _pagination_values(payload: Any, perpage: int) -> Dict[str, int]:
+    """Page and item totals from a KinoPub list response.
+
+    KinoPub uses ``pagination.total`` for the number of pages; the item count,
+    when present, is exposed separately as ``total_count`` / ``total_items``.
+    """
     pagination = payload.get('pagination') if isinstance(payload, dict) and isinstance(payload.get('pagination'), dict) else {}
     if not pagination and isinstance(payload, dict) and isinstance(payload.get('meta'), dict):
         pagination = payload.get('meta')
 
-    def first_int(*values: Any) -> int:
-        for value in values:
-            try:
-                if value is not None and str(value) != '':
-                    return int(value)
-            except (TypeError, ValueError):
-                pass
-        return 0
-
-    total_pages = first_int(
+    total_pages = _first_int(
         pagination.get('total'), pagination.get('pages'), pagination.get('total_pages'),
         pagination.get('page_count'), pagination.get('last_page'),
         payload.get('pages') if isinstance(payload, dict) else None,
         payload.get('total_pages') if isinstance(payload, dict) else None,
     )
-    total_items = first_int(
+    total_items = _first_int(
         pagination.get('total_count'), pagination.get('total_items'), pagination.get('items_count'),
         payload.get('total_count') if isinstance(payload, dict) else None,
         payload.get('total_items') if isinstance(payload, dict) else None,
     )
     if not total_items and total_pages:
+        # Upper-bound estimate until the final page is loaded.
         total_items = total_pages * perpage
     return {'total_pages': max(0, total_pages), 'total_items': max(0, total_items)}
 
@@ -992,6 +999,73 @@ async def catalog_search(q: str, mode: str = 'all', kp_session: Optional[str] = 
     return {'query': query, 'mode': mode, 'items': items}
 
 
+def _name_list(value: Any) -> List[str]:
+    """Flatten KinoPub's people/country fields into plain names.
+
+    They arrive as a comma-separated string in some payloads and as a list of
+    ``{id, title}`` objects in others.
+    """
+    names: List[str] = []
+    if isinstance(value, str):
+        names = [part.strip() for part in value.split(',')]
+    elif isinstance(value, list):
+        for entry in value:
+            if isinstance(entry, dict):
+                names.append(str(entry.get('title') or entry.get('name') or '').strip())
+            elif entry:
+                names.append(str(entry).strip())
+    return [name for name in names if name]
+
+
+def _vote_counts(raw: Dict[str, Any]) -> Dict[str, int]:
+    positive = _plain_number(_pick_first(raw, ['positive', 'rating_positive', 'votes_positive', 'likes']))
+    negative = _plain_number(_pick_first(raw, ['negative', 'rating_negative', 'votes_negative', 'dislikes']))
+    if positive is None and negative is None:
+        # Only the net balance and a total are exposed: recover both halves.
+        net = _plain_number(raw.get('rating'))
+        total = _plain_number(_pick_first(raw, ['rating_votes', 'votes_total', 'votes_count', 'vote_count']))
+        if net is not None and total and total > 0 and abs(net) <= total:
+            positive = (total + net) / 2.0
+            negative = total - positive
+    return {
+        'positive': int(positive) if positive is not None else 0,
+        'negative': int(negative) if negative is not None else 0,
+    }
+
+
+def _item_details(raw: Dict[str, Any], media: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The extra fields the details panel shows beyond a catalogue card."""
+    duration = _plain_number(_nested_get(raw, 'duration.total')) or _plain_number(_pick_first(raw, ['duration', 'length']))
+    subtitle_langs: List[str] = []
+    audio_langs: List[str] = []
+    for entry in media:
+        for subtitle in entry.get('subtitles') or []:
+            name = _pick_first(subtitle, ['language_name', 'language', 'lang'], '') if isinstance(subtitle, dict) else ''
+            if name and str(name) not in subtitle_langs:
+                subtitle_langs.append(str(name))
+        for audio in entry.get('audios') or []:
+            name = _pick_first(audio, ['language_name', 'language', 'lang'], '') if isinstance(audio, dict) else ''
+            if name and str(name) not in audio_langs:
+                audio_langs.append(str(name))
+    seasons = {str(entry.get('season') or 1) for entry in media}
+    return {
+        'countries': _name_list(raw.get('countries') or raw.get('country')),
+        'director': ', '.join(_name_list(raw.get('director') or raw.get('directors'))),
+        'cast': _name_list(raw.get('cast') or raw.get('actors')),
+        'duration': int(duration) if duration else 0,
+        'quality': str(_pick_first(raw, ['quality', 'max_quality'], '') or ''),
+        'votes': _vote_counts(raw),
+        'imdb_votes': int(_plain_number(_pick_first(raw, ['imdb_votes', 'imdb_vote', 'votes_imdb'])) or 0),
+        'kinopoisk_votes': int(_plain_number(_pick_first(raw, ['kinopoisk_votes', 'kinopoisk_vote', 'votes_kinopoisk'])) or 0),
+        'subtitle_langs': subtitle_langs,
+        'audio_langs': audio_langs,
+        'seasons_count': len(seasons) if len(media) > 1 else 0,
+        'episodes_count': len(media) if len(media) > 1 else 0,
+        'updated_at': int(_plain_number(_pick_first(raw, ['updated', 'updated_at', 'created'])) or 0),
+        'finished': bool(raw.get('finished')) if raw.get('finished') is not None else None,
+    }
+
+
 @app.get('/catalog/items/{item_id}')
 async def catalog_item(item_id: str, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
     session = await refresh_if_needed(kp_session or '', session_get(kp_session))
@@ -999,13 +1073,13 @@ async def catalog_item(item_id: str, kp_session: Optional[str] = Cookie(default=
     raw_item = payload.get('item') if isinstance(payload, dict) and isinstance(payload.get('item'), dict) else payload
     item = normalize_catalog_item(raw_item if isinstance(raw_item, dict) else {'id': item_id})
     media = collect_media(payload)
+    item.update(_item_details(raw_item if isinstance(raw_item, dict) else {}, media))
     item['media'] = media
-    item['seasons'] = []
     seasons: Dict[str, Dict[str, Any]] = {}
     for entry in media:
         season_no = str(entry.get('season') or 1)
         seasons.setdefault(season_no, {'number': entry.get('season') or 1, 'episodes': []})['episodes'].append(entry)
-    item['seasons'] = list(seasons.values())
+    item['seasons'] = sorted(seasons.values(), key=lambda s: _plain_number(s['number']) or 0)
     return item
 
 
@@ -1020,22 +1094,45 @@ async def catalog_play(item_id: str, media_id: Optional[str] = None, kp_session:
     streams = list(selected.get('streams') or [])
     subtitles = list(selected.get('subtitles') or [])
     audios = list(selected.get('audios') or [])
-    if not streams and not str(selected['id']).startswith('direct-'):
-        links = await kino_get(session, 'v1/items/media-links', {'mid': selected['id']})
-        files = links.get('files') if isinstance(links, dict) else []
-        if isinstance(files, list):
-            for file_value in files:
+    expected = expected_track_count(selected.get('tracks'))
+    # /v1/items/<id> frequently ships a trimmed video node that lists only the
+    # default audio track, while media-links carries the full set. Ask for it
+    # whenever the payload looks incomplete, not only when streams are missing,
+    # and merge the result instead of replacing what we already have.
+    incomplete = (not streams) or (not audios) or (expected > len(audios))
+    if incomplete and not str(selected['id']).startswith('direct-'):
+        try:
+            links = await kino_get(session, 'v1/items/media-links', {'mid': selected['id']})
+        except HTTPException as exc:
+            links = {}
+            log_event('media', 'media-links lookup failed', {'media_id': selected['id'], 'status': exc.status_code})
+        if isinstance(links, dict):
+            extra_streams: List[Dict[str, Any]] = []
+            for file_value in (links.get('files') or []):
                 if isinstance(file_value, dict):
-                    streams.extend(stream_from_file(file_value))
-        if isinstance(links, dict) and isinstance(links.get('subtitles'), list):
-            subtitles = links['subtitles']
-        if isinstance(links, dict) and isinstance(links.get('audios'), list):
-            audios = links['audios']
+                    extra_streams.extend(stream_from_file(file_value))
+            merge_unique_list(streams, extra_streams, stream_key)
+            merge_unique_list(audios, links.get('audios'), audio_key)
+            merge_unique_list(subtitles, links.get('subtitles'), subtitle_key)
+    audios = sorted_audios(audios)
+    # Keep the embedded media node consistent with the top-level lists so the
+    # player sees the same tracks regardless of which field it reads.
+    selected['audios'] = audios
+    selected['subtitles'] = subtitles
+    selected['streams'] = streams
     best = choose_best_stream(streams)
     if not best:
         raise HTTPException(404, 'KinoPub returned no compatible stream URL')
-    log_event('media', 'Play option resolved', {'item_id': item_id, 'media_id': selected['id'], 'protocol': best.get('source_type'), 'quality': best.get('quality'), 'codec': best.get('codec'), 'audio_count': len(audios), 'tracks': selected.get('tracks')})
-    return {'item_id': item_id, 'media': selected, 'streams': streams, 'selected': best, 'subtitles': subtitles, 'audios': audios}
+    log_event('media', 'Play option resolved', {
+        'item_id': item_id, 'media_id': selected['id'], 'protocol': best.get('source_type'),
+        'quality': best.get('quality'), 'codec': best.get('codec'),
+        'audio_count': len(audios), 'expected_tracks': expected, 'tracks': selected.get('tracks'),
+        'subtitle_count': len(subtitles), 'enriched': incomplete,
+    })
+    return {
+        'item_id': item_id, 'media': selected, 'streams': streams, 'selected': best,
+        'subtitles': subtitles, 'audios': audios, 'expected_tracks': expected,
+    }
 
 
 POPULAR_SNAPSHOT_IDS = [
@@ -1487,7 +1584,12 @@ def _vtt_timestamp(seconds: float) -> str:
 
 
 def _shift_vtt(text: str, offset: float) -> str:
-    if offset <= 0:
+    """Move every cue earlier by ``offset`` seconds; a negative value delays them.
+
+    KinoPub ships a per-track ``shift`` and local HLS can start at a non-zero
+    point, so both directions are needed.
+    """
+    if not offset:
         return text
     blocks = text.replace('\r\n', '\n').replace('\r', '\n').split('\n\n')
     shifted = []
@@ -1563,7 +1665,65 @@ async def subtitle(url: str, request: Request, offset: float = 0, kp_session: Op
     finally:
         await upstream.aclose()
     log_event('media', 'Subtitle relayed', {'url': final_url, 'bytes': len(content)})
-    return PlainTextResponse(subtitle_to_vtt(text, max(0.0, float(offset or 0))), media_type='text/vtt; charset=utf-8', headers={'Cache-Control': 'no-store'})
+    shift = max(-3600.0, min(3600.0, float(offset or 0)))
+    return PlainTextResponse(subtitle_to_vtt(text, shift), media_type='text/vtt; charset=utf-8', headers={'Cache-Control': 'no-store'})
+
+def _hls_attributes(raw: str) -> Dict[str, str]:
+    attributes: Dict[str, str] = {}
+    for match in re.finditer(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)', raw):
+        attributes[match.group(1)] = match.group(2).strip('"')
+    return attributes
+
+
+def _hls_audio_renditions(text: str) -> List[Dict[str, Any]]:
+    """Alternate audio renditions declared by an HLS master playlist."""
+    renditions: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith('#EXT-X-MEDIA:'):
+            continue
+        attributes = _hls_attributes(line[len('#EXT-X-MEDIA:'):])
+        if str(attributes.get('TYPE', '')).upper() != 'AUDIO':
+            continue
+        renditions.append({
+            'name': attributes.get('NAME', ''),
+            'language': attributes.get('LANGUAGE', ''),
+            'group_id': attributes.get('GROUP-ID', ''),
+            'channels': attributes.get('CHANNELS', ''),
+            'default': str(attributes.get('DEFAULT', 'NO')).upper() == 'YES',
+        })
+    return renditions
+
+
+@app.get('/media/audio-variants')
+async def media_audio_variants(url: str, request: Request, kp_session: Optional[str] = Cookie(default=None)):
+    """Report the alternate audio renditions a KinoPub HLS variant exposes.
+
+    When a variant declares two or more, the player can switch audio through
+    hls.js alone: no remux, no restart, and seeking keeps working normally.
+    """
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    upstream, final_url = await open_media(url, media_headers(session, request))
+    try:
+        if upstream.status_code >= 400:
+            raise HTTPException(upstream.status_code, 'Upstream playlist request failed')
+        text = (await upstream.aread()).decode('utf-8-sig', errors='replace')
+    finally:
+        await upstream.aclose()
+    renditions = _hls_audio_renditions(text)
+    log_event('media', 'HLS audio renditions probed', {
+        'host': urlparse(final_url).hostname,
+        'master': '#EXT-X-STREAM-INF' in text,
+        'count': len(renditions),
+        'names': [x['name'] or x['language'] for x in renditions][:8],
+    })
+    return {
+        'url': url,
+        'master': '#EXT-X-STREAM-INF' in text,
+        'count': len(renditions),
+        'renditions': renditions,
+    }
+
 
 @app.get('/hls')
 async def hls(url: str, request: Request, kp_session: Optional[str] = Cookie(default=None)):
@@ -1586,20 +1746,55 @@ def _ffmpeg_headers(headers: Dict[str, str]) -> str:
     return ''.join(f'{key}: {value}\r\n' for key, value in headers.items() if value and key.lower() != 'range')
 
 
-def _ffmpeg_http_reconnect_options() -> List[str]:
-    """Make long KinoPub CDN reads survive premature TLS/HTTP disconnects."""
-    return [
-        '-seekable', '1',
-        '-reconnect', '1',
-        '-reconnect_on_network_error', '1',
-        '-reconnect_on_http_error', '429,500,502,503,504',
-        '-reconnect_streamed', '1',
-        '-reconnect_delay_max', '2',
-        '-reconnect_max_retries', '30',
-        '-reconnect_delay_total_max', '60',
-        '-respect_retry_after', '1',
-        '-rw_timeout', '30000000',
-    ]
+# Present in every FFmpeg release this project can plausibly run on.
+_FFMPEG_BASE_HTTP_OPTIONS = [
+    '-seekable', '1',
+    '-rw_timeout', '30000000',
+    '-reconnect', '1',
+    '-reconnect_streamed', '1',
+    '-reconnect_delay_max', '4',
+]
+# Added in later releases. Passing one FFmpeg does not know is fatal
+# ("Option not found"), which would kill every job before it starts, so each is
+# used only after the installed binary confirms it.
+_FFMPEG_OPTIONAL_HTTP_OPTIONS = [
+    ('multiple_requests', ['-multiple_requests', '1']),
+    ('reconnect_on_network_error', ['-reconnect_on_network_error', '1']),
+    ('reconnect_on_http_error', ['-reconnect_on_http_error', '429,500,502,503,504']),
+    ('reconnect_max_retries', ['-reconnect_max_retries', '30']),
+    ('reconnect_delay_total_max', ['-reconnect_delay_total_max', '180']),
+    ('respect_retry_after', ['-respect_retry_after', '1']),
+]
+_ffmpeg_http_options_cache: Optional[List[str]] = None
+
+
+async def _ffmpeg_http_reconnect_options() -> List[str]:
+    """Make long KinoPub CDN reads survive premature TLS/HTTP disconnects.
+
+    The option set is resolved once against the installed FFmpeg and reused.
+    """
+    global _ffmpeg_http_options_cache
+    if _ffmpeg_http_options_cache is not None:
+        return list(_ffmpeg_http_options_cache)
+    help_text = ''
+    try:
+        process = await asyncio.create_subprocess_exec(
+            'ffmpeg', '-hide_banner', '-h', 'protocol=http',
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=15)
+        help_text = stdout.decode('utf-8', errors='replace')
+    except (FileNotFoundError, OSError, asyncio.TimeoutError) as exc:
+        log_event('media', 'FFmpeg HTTP option probe failed', {'error': str(exc)[:200]})
+    options = list(_FFMPEG_BASE_HTTP_OPTIONS)
+    supported = []
+    for name, flags in _FFMPEG_OPTIONAL_HTTP_OPTIONS:
+        if help_text and re.search(r'^\s*-' + re.escape(name) + r'\b', help_text, re.M):
+            options += flags
+            supported.append(name)
+    _ffmpeg_http_options_cache = options
+    log_event('media', 'FFmpeg HTTP options resolved', {'optional': supported, 'probed': bool(help_text)})
+    return list(options)
 
 
 def _playlist_metrics(path: Path) -> Dict[str, Any]:
@@ -1621,9 +1816,16 @@ def _playlist_metrics(path: Path) -> Dict[str, Any]:
     return {'segments': segments, 'duration': round(duration, 3), 'ended': '#EXT-X-ENDLIST' in text}
 
 
-async def _inspect_audio_source(url: str, headers: Dict[str, str], requested: int) -> Dict[str, Any]:
-    """Resolve the KinoPub audio index to an absolute FFmpeg stream index."""
-    command = ['ffprobe', '-v', 'error', *_ffmpeg_http_reconnect_options()]
+async def _inspect_audio_source(url: str, headers: Dict[str, str], ordinal: int) -> Dict[str, Any]:
+    """Validate the requested audio track position against the real file.
+
+    ``ordinal`` is the zero-based position inside ``media.audios``, which is the
+    same ordering FFmpeg uses for ``0:a:N``. KinoPub's ``audios[].index`` is a
+    per-file track number, not an absolute stream index, so it must never be fed
+    to ``-map 0:<n>`` directly: a cover-art stream or an embedded subtitle track
+    shifts absolute indexes and silently selects the wrong audio.
+    """
+    command = ['ffprobe', '-v', 'error', *(await _ffmpeg_http_reconnect_options())]
     raw_headers = _ffmpeg_headers(headers)
     if raw_headers:
         command += ['-headers', raw_headers]
@@ -1648,7 +1850,7 @@ async def _inspect_audio_source(url: str, headers: Dict[str, str], requested: in
         raise HTTPException(504, 'Timed out while inspecting the media file') from exc
     if process.returncode != 0:
         detail = stderr.decode('utf-8', errors='replace')[-1000:]
-        log_event('media', 'Audio HLS probe failed', {'track': requested, 'error': detail})
+        log_event('media', 'Audio HLS probe failed', {'ordinal': ordinal, 'error': detail})
         raise HTTPException(502, 'Could not inspect audio tracks in the HTTP source')
     try:
         payload = json.loads(stdout.decode('utf-8', errors='replace') or '{}')
@@ -1656,19 +1858,21 @@ async def _inspect_audio_source(url: str, headers: Dict[str, str], requested: in
         raise HTTPException(502, 'Invalid FFprobe response') from exc
     streams = payload.get('streams') if isinstance(payload, dict) else []
     audio_streams = [stream for stream in streams or [] if stream.get('codec_type') == 'audio']
-    selected = next((stream for stream in audio_streams if int(stream.get('index', -1)) == requested), None)
-    if selected is None and 1 <= requested <= len(audio_streams):
-        selected = audio_streams[requested - 1]
-    if selected is None:
-        available = [int(stream.get('index', -1)) for stream in audio_streams]
-        log_event('media', 'Audio HLS track missing', {'requested': requested, 'available': available})
-        raise HTTPException(409, f'Audio stream {requested} is not present in this quality')
-    duration = 0.0
+    if not audio_streams:
+        raise HTTPException(409, 'В этом файле нет звуковых дорожек')
+    if not 0 <= ordinal < len(audio_streams):
+        log_event('media', 'Audio HLS track missing', {
+            'ordinal': ordinal,
+            'available': len(audio_streams),
+            'absolute': [int(stream.get('index', -1)) for stream in audio_streams],
+        })
+        raise HTTPException(409, f'В этом качестве только {len(audio_streams)} звуковых дорожек')
+    selected = audio_streams[ordinal]
     try:
         duration = max(0.0, float((payload.get('format') or {}).get('duration') or 0))
     except (TypeError, ValueError):
         duration = 0.0
-    return {'stream': selected, 'duration': duration}
+    return {'stream': selected, 'duration': duration, 'ordinal': ordinal, 'audio_count': len(audio_streams)}
 
 
 def _audio_job_public(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -1727,6 +1931,11 @@ async def _monitor_audio_hls_job(job_id: str) -> None:
         pass
     job['status'] = 'failed'
     job['error'] = 'FFmpeg не смог подготовить HLS с выбранной дорожкой.'
+    # Release the dedup key so the next attempt starts a fresh process instead
+    # of being handed this corpse until the TTL expires.
+    key = job.get('key')
+    if key and audio_hls_job_keys.get(key) == job_id:
+        audio_hls_job_keys.pop(key, None)
     log_event('media', 'Audio HLS failed', {'job': job_id, 'track': job['track'], 'code': code, 'error': error})
 
 
@@ -1771,17 +1980,22 @@ async def create_audio_hls_job(payload: AudioHlsPayload, request: Request, kp_se
         await upstream.aclose()
     inspected = await _inspect_audio_source(final_url, headers, payload.track)
     selected = inspected['stream']
-    resolved_track = int(selected['index'])
+    ordinal = int(inspected['ordinal'])
     requested_start = max(0.0, float(payload.start or 0))
     bucket_start = float(int(requested_start // AUDIO_HLS_START_BUCKET) * AUDIO_HLS_START_BUCKET)
     source_key = hashlib.sha256(final_url.encode('utf-8')).hexdigest()
     session_key = hashlib.sha256(sid.encode('utf-8')).hexdigest()[:16]
-    job_key = f'{session_key}:{source_key}:{resolved_track}:{bucket_start:.3f}'
+    job_key = f'{session_key}:{source_key}:a{ordinal}:{bucket_start:.3f}'
     existing_id = audio_hls_job_keys.get(job_key)
     existing = audio_hls_jobs.get(existing_id or '')
-    if existing and existing.get('status') not in {'failed', 'stopped'}:
-        existing['touched'] = time.time()
-        return _audio_job_public(existing)
+    if existing:
+        # Recompute before reusing: a job whose FFmpeg already died still holds
+        # status 'starting', and reusing it would fail every retry until the TTL.
+        snapshot = _audio_job_public(existing)
+        if snapshot['status'] not in {'failed', 'stopped'}:
+            existing['touched'] = time.time()
+            return snapshot
+        audio_hls_job_keys.pop(job_key, None)
 
     job_id = secrets.token_urlsafe(12).replace('-', '').replace('_', '')
     job_dir = AUDIO_HLS_ROOT / job_id
@@ -1791,29 +2005,36 @@ async def create_audio_hls_job(payload: AudioHlsPayload, request: Request, kp_se
     segment_pattern = str(job_dir / 'segment_%06d.ts')
     raw_headers = _ffmpeg_headers(headers)
     command = ['ffmpeg', '-hide_banner', '-loglevel', 'warning', '-nostdin']
-    command += _ffmpeg_http_reconnect_options()
+    command += await _ffmpeg_http_reconnect_options()
     if bucket_start > 0:
         command += ['-ss', f'{bucket_start:.3f}']
     if raw_headers:
         command += ['-headers', raw_headers]
     command += [
-        '-fflags', '+genpts+discardcorrupt',
+        # No '+discardcorrupt': on a reconnecting CDN read it silently drops
+        # packets, which is exactly how the audio disappears mid-playback.
+        '-fflags', '+genpts',
         '-i', final_url,
         '-map', '0:v:0',
-        '-map', f'0:{resolved_track}',
+        # Position-based selection. '0:<absolute index>' picks the wrong stream
+        # whenever the MP4 carries cover art or embedded subtitles.
+        '-map', f'0:a:{ordinal}',
         '-sn', '-dn',
         '-c:v', 'copy',
-        '-bsf:v', 'h264_mp4toannexb',
+        # No explicit '-bsf:v h264_mp4toannexb': the HLS muxer applies the right
+        # bitstream filter itself, and forcing a second pass over already
+        # converted NALs is what produces "Invalid NAL unit size". It also
+        # breaks outright on HEVC sources.
         '-c:a', 'aac',
         '-profile:a', 'aac_low',
         '-ar', '48000',
         '-b:a', '192k',
         '-ac', '2',
-        '-af', 'aresample=async=1:first_pts=0',
-        '-max_muxing_queue_size', '2048',
+        # 'first_pts=0' pinned audio to zero while video kept the seek-adjusted
+        # timeline, drifting A/V apart on every non-zero start.
+        '-af', 'aresample=async=1',
+        '-max_muxing_queue_size', '4096',
         '-avoid_negative_ts', 'make_zero',
-        '-muxdelay', '0',
-        '-muxpreload', '0',
         '-f', 'hls',
         '-hls_time', str(AUDIO_HLS_SEGMENT_SECONDS),
         '-hls_list_size', '0',
@@ -1849,7 +2070,7 @@ async def create_audio_hls_job(payload: AudioHlsPayload, request: Request, kp_se
         'touched': now,
         'start': bucket_start,
         'requested_start': requested_start,
-        'track': resolved_track,
+        'track': ordinal,
         'duration': inspected.get('duration', 0),
     }
     audio_hls_jobs[job_id] = job
@@ -1858,8 +2079,9 @@ async def create_audio_hls_job(payload: AudioHlsPayload, request: Request, kp_se
     log_event('media', 'Audio HLS started', {
         'job': job_id,
         'host': urlparse(final_url).hostname,
-        'requested_track': payload.track,
-        'resolved_track': resolved_track,
+        'ordinal': ordinal,
+        'audio_count': inspected.get('audio_count'),
+        'absolute_index': selected.get('index'),
         'start': bucket_start,
         'codec': selected.get('codec_name'),
         'channels': selected.get('channels'),
@@ -1950,21 +2172,6 @@ MOCK_ITEMS: List[Dict[str, Any]] = [
     {'id':'m3','type':'movie','title':'Бегущий по лезвию 2049','original_title':'Blade Runner 2049','year':2017,'rating':8.2,'duration':9840,'genres':['фантастика','триллер'],'poster':'linear-gradient(145deg,#8b4d2c,#141217)','backdrop':'linear-gradient(110deg,#0d0b0f,#8b4d2c 70%,#261410)','description':'Контрастный макет для проверки постеров, фокуса и производительности старого webOS.','streams':[]},
     {'id':'s2','type':'series','title':'Разделение','original_title':'Severance','year':2022,'rating':8.7,'genres':['триллер','фантастика'],'poster':'linear-gradient(145deg,#31506f,#0d1319)','backdrop':'linear-gradient(110deg,#091018,#31506f 70%,#101b27)','description':'Демонстрация экранов сериала, продолжения просмотра и перехода к следующей серии.','seasons':[{'number':1,'episodes':[{'id':'s2e1','number':1,'title':'Добрые вести об аде','duration':3420},{'id':'s2e2','number':2,'title':'Половина петли','duration':3300}]}],'streams':[]}
 ]
-
-@app.get('/mock/home')
-def mock_home() -> Dict[str, Any]:
-    return {'hero': MOCK_ITEMS[0], 'rows': [
-        {'id':'continue','title':'Продолжить просмотр','items':MOCK_ITEMS[1:4]},
-        {'id':'popular','title':'Популярное','items':MOCK_ITEMS},
-        {'id':'series','title':'Сериалы','items':[x for x in MOCK_ITEMS if x['type']=='series']}
-    ]}
-
-@app.get('/mock/items/{media_id}')
-def mock_item(media_id: str) -> Dict[str, Any]:
-    for item in MOCK_ITEMS:
-        if item['id'] == media_id:
-            return item
-    raise HTTPException(404, 'Mock item not found')
 
 @app.get('/mock/search')
 def mock_search(q: str = '') -> Dict[str, Any]:
