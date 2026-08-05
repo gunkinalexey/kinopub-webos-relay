@@ -1,0 +1,34 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      KINOPUB_CLIENT_ID: ${KINOPUB_CLIENT_ID:-}
+      KINOPUB_CLIENT_SECRET: ${KINOPUB_CLIENT_SECRET:-}
+      KINOPUB_API_BASE: ${KINOPUB_API_BASE:-https://api.service-kp.com}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      STREAM_HOST_SUFFIXES: ${STREAM_HOST_SUFFIXES:-}
+      MEDIA_REFERER: ${MEDIA_REFERER:-}
+      MEDIA_ORIGIN: ${MEDIA_ORIGIN:-}
+      AUDIO_HLS_ROOT: /data/audio_hls
+      AUDIO_HLS_TTL: ${AUDIO_HLS_TTL:-3600}
+      AUDIO_HLS_SEGMENT_SECONDS: ${AUDIO_HLS_SEGMENT_SECONDS:-4}
+      AUDIO_HLS_START_BUCKET: ${AUDIO_HLS_START_BUCKET:-10}
+      DB_PATH: /data/kp.db
+    volumes:
+      - kp_data:/data
+    restart: unless-stopped
+
+  frontend:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  kp_data:

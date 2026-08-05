@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>kinopub</title>
+  <link id="appFavicon" rel="icon" type="image/svg+xml" href="assets/kp-logo.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<svg class="icon-sprite" aria-hidden="true" width="0" height="0" style="position:absolute;overflow:hidden">
+  <symbol id="i-new" viewBox="0 0 24 24"><path d="M12 2l2.2 3.2 3.8-.5.5 3.8L22 10.7 20.3 14l1.7 3.3-3.5 2.2-.5 3.8-3.8-.5L12 22l-2.2-3.2-3.8.5-.5-3.8L2 13.3 3.7 10 2 6.7l3.5-2.2.5-3.8 3.8.5L12 2zm-1.2 5.2v4.1L8 14.1l1.9 1.9 4.7-4.7-3.8-4.1z"/></symbol>
+  <symbol id="i-movie" viewBox="0 0 24 24"><path d="M3 5h18v14H3V5zm2 2v2h3V7H5zm5 0v2h4V7h-4zm6 0v2h3V7h-3zM5 11v6h14v-6H5z"/></symbol>
+  <symbol id="i-tv" viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 012 2v10a2 2 0 01-2 2h-6v2h-4v-2H4a2 2 0 01-2-2V7a2 2 0 012-2zm0 2v10h16V7H4zm5-5l3 3 3-3 1.4 1.4L12 7.8 7.6 3.4 9 2z"/></symbol>
+  <symbol id="i-anime" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm-5.2 9.3l2.9-3.1 2.3 2.4 2.3-2.4 2.9 3.1-2.1 4.7H8.9l-2.1-4.7zm2.6 5.9h5.2A4.7 4.7 0 0112 19a4.7 4.7 0 01-2.6-1.8z"/></symbol>
+  <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 4v12.3A3.7 3.7 0 117 13V6l12-3v10.3A3.7 3.7 0 1117 10V5.6L9 7.6V4z"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><path d="M3 4h18v4H3V4zm2 6h14v10H5V10zm4 3v2h6v-2H9z"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6V2zm8 2.5V8h3.5L14 4.5zM8 11v2h8v-2H8zm0 4v2h8v-2H8z"/></symbol>
+  <symbol id="i-live" viewBox="0 0 24 24"><path d="M4 5h16v14H4V5zm2 2v10h12V7H6zm4 2l5 3-5 3V9z"/></symbol>
+  <symbol id="i-ball" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 2l2.6 1.9-1 3H10.4l-1-3L12 4zM5.2 8.1l3.1.1 1 3-2.6 1.9-2.5-1.8a7.8 7.8 0 011-3.2zm13.6 0a7.8 7.8 0 011 3.2l-2.5 1.8-2.6-1.9 1-3 3.1-.1zM8.1 18.4l1-3h3.2l1 3-1.3 1.4a7.8 7.8 0 01-3.9-1.4zm7.8 0a7.8 7.8 0 01-3.9 1.4l-1.3-1.4 1-3h3.2l1 3z"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M12 22a2.5 2.5 0 002.4-2h-4.8A2.5 2.5 0 0012 22zm7-6V11a7 7 0 00-5-6.7V3a2 2 0 10-4 0v1.3A7 7 0 005 11v5l-2 2h18l-2-2z"/></symbol>
+  <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 2h12v20l-6-4-6 4V2z"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M13 3a9 9 0 00-8.5 6H2l3.5 4L9 9H6.6A7 7 0 1113 19a6.9 6.9 0 01-5-2l-1.4 1.4A9 9 0 1013 3zm-1 5v6l5 3 1-1.7-4-2.3V8h-2z"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M4 5h3v3H4V5zm5 0h11v3H9V5zM4 11h3v3H4v-3zm5 0h11v3H9v-3zM4 17h3v3H4v-3zm5 0h11v3H9v-3z"/></symbol>
+  <symbol id="i-award" viewBox="0 0 24 24"><path d="M7 2h10v5a5 5 0 01-4 4.9V15h4v2H7v-2h4v-3.1A5 5 0 017 7V2zm2 2v3a3 3 0 006 0V4H9zM5 4H2v3a4 4 0 004 4V9a2 2 0 01-2-2V6h1V4zm14 0v2h1v1a2 2 0 01-2 2v2a4 4 0 004-4V4h-3zM6 19h12v3H6v-3z"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M3 4h18v13H8l-5 4V4zm4 5h10V7H7v2zm0 4h7v-2H7v2z"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M8 2h2v5h4V2h2v5h2v4a6 6 0 01-5 5.9V22h-2v-5.1A6 6 0 016 11V7h2V2zm0 7v2a4 4 0 008 0V9H8z"/></symbol>
+  <symbol id="i-ruble" viewBox="0 0 24 24"><path d="M7 2h6a6 6 0 010 12H9v2h6v2H9v4H7v-4H4v-2h3v-2H4v-2h3V2zm2 2v8h4a4 4 0 000-8H9z"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><path d="M3 5h18v14H3V5zm2 2v.5l7 5 7-5V7H5zm14 10V9.9l-7 5-7-5V17h14z"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M2 11L22 2l-8 20-3.8-7.2L2 11zm4.8.4l4.6 1.8L17 7l-10.2 4.4z"/></symbol>
+  <symbol id="i-speed" viewBox="0 0 24 24"><path d="M12 3a9 9 0 00-7.8 13.5L6 15.4A7 7 0 1118 15.4l1.8 1.1A9 9 0 0012 3zm4.8 5.2l-5.6 4.2a2 2 0 102.4 2.4l4.2-5.6-1-1z"/></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2 8.8A15 15 0 0122 8.8l-1.5 1.5a13 13 0 00-17 0L2 8.8zm3 3A10 10 0 0119 12l-1.5 1.5a8 8 0 00-11 0L5 12zm3 3a6 6 0 018 0l-4 4-4-4z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><path d="M10 3a7 7 0 105.2 11.7L21 20.5 20.5 21l-5.8-5.8A7 7 0 0010 3zm0 2a5 5 0 110 10 5 5 0 010-10z"/></symbol>
+  <symbol id="i-subtitles" viewBox="0 0 24 24"><path d="M3 5h18v14H3V5zm2 2v10h14V7H5zm2 6h4v2H7v-2zm6 0h4v2h-4v-2zM7 9h10v2H7V9z"/></symbol>
+  <symbol id="i-dolby" viewBox="0 0 24 24"><path d="M3 5h7a7 7 0 010 14H3V5zm2 2v10h5a5 5 0 000-10H5zm9-2h7v14h-7a7 7 0 010-14zm5 2h-5a5 5 0 000 10h5V7z"/></symbol>
+  <symbol id="i-hd" viewBox="0 0 24 24"><path d="M2 6h20v12H2V6zm3 3v6h2v-2h2v2h2V9H9v2H7V9H5zm8 0v6h3a3 3 0 000-6h-3zm2 2h1a1 1 0 010 2h-1v-2z"/></symbol>
+  <symbol id="i-thumb" viewBox="0 0 24 24"><path d="M9 10l3-7a2 2 0 012 2v4h5a2 2 0 012 2l-2 8H9v-9zm-6 0h4v9H3v-9z"/></symbol>
+  <symbol id="i-imdb" viewBox="0 0 24 24"><path d="M2 6h20v12H2V6zm3 3v6h2V9H5zm4 0v6h2v-3l1 3h2l1-3v3h2V9h-2l-2 3-2-3H9zm10 0v6h1a2 2 0 002-2v-2a2 2 0 00-2-2h-1z"/></symbol>
+  <symbol id="i-kp" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm-2 5v10H8V7h2zm2 0h4l-3 5 3 5h-2.5L11 12l2.5-5H12z"/></symbol>
+</svg>
+
+<div id="app" class="app-shell">
+  <aside class="sidebar">
+    <div class="brand-block"><img id="brandLogo" class="brand-logo-img" src="assets/kp-logo.svg" alt=""><div id="brandText" class="brand-text">kinopub</div>
+    </div>
+
+    <div class="sidebar-section-title">Библиотека</div>
+    <nav class="sidebar-nav">
+      <button class="focusable side-link active" data-route="popular"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-new"></use></svg></span><span>Новинки</span></button>
+      <button class="focusable side-link" data-route="movie"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-movie"></use></svg></span><span>Фильмы</span></button>
+      <button class="focusable side-link" data-route="serial"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-doc"></use></svg></span><span>Сериалы</span></button>
+      <button class="focusable side-link" data-route="anime"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-anime"></use></svg></span><span>Аниме</span></button>
+      <button class="focusable side-link" data-route="concert"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-music"></use></svg></span><span>Концерты</span></button>
+      <button class="focusable side-link" data-route="documovie"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-archive"></use></svg></span><span>Докфильмы</span></button>
+      <button class="focusable side-link" data-route="docuserial"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-doc"></use></svg></span><span>Докусериал</span></button>
+      <button class="focusable side-link" data-route="tvshow"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-live"></use></svg></span><span>ТВ Шоу</span></button>
+      <button class="focusable side-link" data-route="sport"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-ball"></use></svg></span><span>Спорт</span></button>
+    </nav>
+
+    <div class="sidebar-section-title">Остальное</div>
+    <nav class="sidebar-nav">
+      <button class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-bell"></use></svg></span><span>Я смотрю</span><span class="side-count">1</span></button>
+      <button class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-bookmark"></use></svg></span><span>Закладки</span></button>
+      <button class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-history"></use></svg></span><span>История</span></button>
+      <button class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-new"></use></svg></span><span>Новые эпизоды</span></button>
+      <button class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-list"></use></svg></span><span>Подборки</span></button>
+      <button class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-award"></use></svg></span><span>Награды</span></button>
+      <button class="focusable side-link" data-route="settings"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-plug"></use></svg></span><span>Настройки</span></button>
+      <button id="diagnosticsButton" class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-archive"></use></svg></span><span>Диагностика</span></button>
+      <button id="apiExplorerButton" class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-doc"></use></svg></span><span>API Explorer</span></button>
+    </nav>
+
+  </aside>
+
+  <section class="content-shell">
+    <header class="content-topbar">
+      <div id="searchHead" class="search-head">
+        <input id="searchInput" class="focusable top-search" placeholder="Название или имя..." autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="searchSuggestions">
+        <button id="searchGo" class="focusable search-button" aria-label="Поиск"><svg class="ui-icon"><use xlink:href="#i-search"></use></svg></button>
+        <div id="searchSuggestions" class="search-suggestions hidden" role="listbox"></div>
+      </div>
+      <div class="topbar-actions">
+        <button id="subscriptionChip" class="focusable account-chip subscription-loading" title="Статус подписки">…</button>
+        <button id="loginButton" class="focusable avatar-button" aria-label="Профиль"><img src="assets/anon_m.png" alt=""></button>
+      </div>
+    </header>
+
+    <main id="catalogScreen" class="screen catalog-screen">
+      <div id="catalogTop" class="catalog-top"></div>
+      <div id="catalogGrid" class="poster-grid"></div>
+      <nav id="catalogPagination" class="catalog-pagination hidden" aria-label="Страницы каталога"></nav>
+    </main>
+
+    <main id="searchScreen" class="screen hidden page-screen">
+      <div class="search-page-head">
+        <h3 id="searchPageTitle">Поиск</h3>
+        <div id="searchModes" class="search-mode-tabs">
+          <button class="focusable search-mode active" data-search-mode="all">Все</button>
+          <button class="focusable search-mode" data-search-mode="title">По названию</button>
+          <button class="focusable search-mode" data-search-mode="actor">Актёры</button>
+          <button class="focusable search-mode" data-search-mode="director">Режиссёры</button>
+        </div>
+      </div>
+      <div id="searchStatus" class="search-status"></div>
+      <div id="searchResults" class="poster-grid"></div>
+    </main>
+
+    <main id="settingsScreen" class="screen hidden page-screen">
+      <div class="catalog-title-row"><h3>Настройки</h3></div>
+      <div class="settings-grid">
+        <label>Качество<select id="setQuality" class="focusable"><option value="auto">Авто</option><option value="1080">1080p</option><option value="720">720p</option></select></label>
+        <label>Режим потока<select id="setMode" class="focusable"><option value="auto">Авто</option><option value="direct">Direct</option><option value="relay">Relay</option><option value="hls">HLS relay</option></select></label>
+        <label>Язык аудио<select id="setAudio" class="focusable"><option value="ru">Русский</option><option value="original">Оригинал</option></select></label>
+        <label>Субтитры<select id="setSubs" class="focusable"><option value="off">Выключены</option><option value="ru">Русские</option><option value="en">English</option></select></label>
+        <label class="toggle-line"><input id="setAutoplay" type="checkbox" class="focusable"> Автопереход к следующей серии</label>
+        <label class="toggle-line"><input id="setMotion" type="checkbox" class="focusable"> Уменьшить анимации</label>
+        <fieldset class="icon-picker-field">
+          <legend>Иконка приложения</legend>
+          <div id="appIconPicker" class="app-icon-picker">
+            <label class="app-icon-option focusable"><input type="radio" name="appIcon" value="kinopub"><span class="app-icon-preview"><img src="assets/kp-logo.svg" alt="kinopub"></span><span>kinopub</span></label>
+            <label class="app-icon-option focusable"><input type="radio" name="appIcon" value="kinoterk"><span class="app-icon-preview app-icon-preview-stack"><img src="assets/dog-icon-1.png" alt="киноТёрк"><img src="assets/dog-icon-2.png" alt=""><img src="assets/dog-icon-3.png" alt=""></span><span>киноТёрк</span></label>
+          </div>
+        </fieldset>
+        <div class="settings-actions">
+          <button id="saveSettings" class="focusable primary">Сохранить</button>
+          <button id="clearCache" class="focusable secondary">Сбросить кэш</button>
+        </div>
+        <div id="settingsStatus"></div>
+      </div>
+    </main>
+  </section>
+
+
+  <div id="subscriptionModal" class="modal hidden"><div class="modal-card subscription-card"><h2 id="subscriptionTitle">Подписка</h2><div id="subscriptionValue" class="subscription-value">Проверяем статус…</div><p id="subscriptionMessage" class="subscription-message"></p><div id="subscriptionEnd" class="subscription-end"></div><div class="hero-actions subscription-actions"><button id="subscriptionRefresh" class="focusable primary">Обновить статус</button><button id="subscriptionClose" class="focusable secondary">Закрыть</button></div></div></div>
+  <div id="detailsModal" class="modal hidden"><div class="modal-card details-card"><button id="detailsClose" class="focusable close-x">×</button><div id="detailsBackdrop" class="details-backdrop"></div><div class="details-body"><h2 id="detailsTitle"></h2><div id="detailsMeta" class="hero-meta"></div><p id="detailsDescription"></p><div id="episodes"></div><button id="detailsPlay" class="focusable primary">▶ Смотреть</button></div></div></div>
+  <div id="authModal" class="modal hidden"><div class="modal-card auth-card"><h2>Подключение устройства</h2><p id="authIntro" class="auth-intro">Для использования приложения необходимо привязать это устройство к аккаунту.</p><button id="authStart" class="focusable primary">Начать привязку устройства</button><div id="authCodePanel" class="hidden"><p>Откройте:</p><div id="verificationUri" class="url"></div><p>и введите код:</p><div id="userCode" class="device-code">------</div><div id="authCountdown" class="countdown"></div><div id="authStatus" class="status"></div></div><button id="authRestart" class="focusable secondary hidden">Получить новый код</button><button id="authClose" class="focusable secondary hidden">Закрыть</button></div></div>
+  <div id="apiExplorerModal" class="modal hidden"><div class="modal-card explorer-card"><div class="modal-head"><h2>API Explorer</h2><button id="apiExplorerClose" class="focusable secondary">Закрыть</button></div><p class="explorer-help">Безопасный режим только для GET. Укажите путь без домена, например <b>v1/items</b>. Токены и чувствительные поля маскируются автоматически.</p><div class="explorer-form"><label>API path<input id="explorerPath" class="focusable" value="" placeholder="v1/items"></label><label>Query string<input id="explorerQuery" class="focusable" placeholder="page=0&amp;perpage=20"></label><div class="hero-actions"><button id="explorerRun" class="focusable primary">Выполнить GET</button><button id="compareFeeds" class="focusable secondary">Сравнить Популярные/Горячие</button><button id="explorerDownload" class="focusable secondary">Скачать JSON</button><button id="explorerCopy" class="focusable secondary">Копировать</button></div></div><div id="explorerStatus" class="explorer-status">Запрос ещё не выполнялся</div><pre id="explorerOutput" class="explorer-output">{}</pre></div></div>
+  <div id="diagnosticsModal" class="modal hidden"><div class="modal-card diagnostics-card"><div class="modal-head"><h2>Диагностика webOS</h2><button id="diagnosticsClose" class="focusable secondary">Закрыть</button></div><div id="diagnosticsGrid" class="diagnostics-grid"></div><div class="test-source"><label>Тестовый URL</label><input id="testUrl" class="focusable" placeholder="https://.../playlist.m3u8"><div class="hero-actions"><button id="testDirect" class="focusable secondary">Direct</button><button id="testRelay" class="focusable secondary">Relay</button><button id="testHls" class="focusable primary">HLS relay</button></div></div><pre id="diagnosticsLog" class="diagnostics-log"></pre></div></div>
+  <div id="playerLayer" class="player-layer hidden"><video id="video" playsinline></video><button id="playerCloseX" class="player-close-x focusable" type="button" aria-label="Закрыть плеер">×</button><div id="playbackFlash" class="playback-flash" aria-hidden="true"><span id="playbackFlashIcon" class="playback-flash-icon"></span></div><div id="playerUi" class="player-ui"><div class="player-top"><div id="playerTitle" class="player-title"></div><div id="playerMode" class="mode-badge">DIRECT</div></div><div id="timeline" class="timeline focusable" tabindex="0" role="slider" aria-label="Позиция воспроизведения" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress" class="progress"></div></div><div class="time-row"><span id="currentTime">00:00</span><span id="duration">00:00</span></div><div class="player-controls">
+  <div class="player-icon-group">
+    <button id="rewind" class="player-icon-button focusable" type="button" aria-label="Перемотать назад на 10 секунд" title="Назад на 10 секунд"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M17 13H8V4"/><path d="M9 12a18 18 0 1 1-2 21"/><text x="24" y="30" text-anchor="middle">10</text></svg></button>
+    <button id="togglePlay" class="player-icon-button player-icon-primary focusable" type="button" aria-label="Пауза" title="Пауза"><svg class="icon-pause" viewBox="0 0 48 48" aria-hidden="true"><rect x="14" y="11" width="7" height="26" rx="2"/><rect x="27" y="11" width="7" height="26" rx="2"/></svg></button>
+    <button id="forward" class="player-icon-button focusable" type="button" aria-label="Перемотать вперёд на 10 секунд" title="Вперёд на 10 секунд"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M31 13h9V4"/><path d="M39 12a18 18 0 1 0 2 21"/><text x="24" y="30" text-anchor="middle">10</text></svg></button>
+    <button id="closePlayer" class="player-icon-button focusable" type="button" aria-label="Закрыть плеер" title="Закрыть"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M14 14l20 20M34 14L14 34"/></svg></button>
+  </div>
+  <div class="player-selects">
+    <label class="player-mode-select-wrap" aria-label="Качество изображения"><span>Качество</span><select id="playerQuality" class="player-mode-select focusable"><option value="">Авто</option></select></label>
+    <label class="player-mode-select-wrap" aria-label="Звуковая дорожка"><span>Звук</span><select id="playerAudio" class="player-mode-select focusable"><option value="auto">Авто</option></select></label>
+    <label class="player-mode-select-wrap" aria-label="Субтитры"><span>Субтитры</span><select id="playerSubtitles" class="player-mode-select focusable"><option value="off">Выкл.</option></select></label>
+    <label class="player-mode-select-wrap" aria-label="Режим воспроизведения"><span>Поток</span><select id="playerStreamMode" class="player-mode-select focusable"><option value="direct">Direct</option><option value="relay">Relay</option><option value="hls">HLS relay</option></select></label>
+  </div>
+</div><div id="playerError" class="player-error"></div></div></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.18/hls.min.js"></script>
+<script src="api.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
