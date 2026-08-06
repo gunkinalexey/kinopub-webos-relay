@@ -54,8 +54,10 @@ const click = el => el.dispatchEvent(new window.MouseEvent('click', { bubbles: t
   const order = [...body.children].map(c => c.id || c.className);
   check('order under the headline', order,
     ['detailsActions', 'detailsEpisodes', 'details-grid']);
+  // Vote buttons legitimately live in the aside (next to the poster) - the
+  // invariant this guards is that Watch/Continue never drifts back in there.
   check('poster column no longer holds a play button',
-    document.querySelectorAll('.details-aside button').length, 0);
+    document.querySelectorAll('.details-aside .details-play, .details-aside .details-play-secondary').length, 0);
 
   console.log('--- never watched: one plain button ---');
   check('single Watch button', labels(), ['▶ Смотреть']);

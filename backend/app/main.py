@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.75', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.76', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -456,6 +456,12 @@ def normalize_catalog_item(raw: Dict[str, Any]) -> Dict[str, Any]:
         'backdrop_fallback': poster if backdrop != poster else '',
         'description': str(_pick_first(raw, ['plot', 'description', 'overview'], '')),
         'watched': _extract_watched_status(raw),
+        # Catalogue list payloads (unlike a single item's detail/media node)
+        # never carry subtitle info, so the grid card can only be honest about
+        # Dolby (real per-item `ac3` flag) and resolution (real `quality`) -
+        # not subtitles, which would otherwise be a fake always-on icon.
+        'has_dolby': bool(raw.get('ac3')),
+        'quality': raw.get('quality') if isinstance(raw.get('quality'), (int, float)) else None,
     }
 
 
@@ -1247,6 +1253,21 @@ async def catalog_item(item_id: str, kp_session: Optional[str] = Cookie(default=
         seasons.setdefault(season_no, {'number': entry.get('season') or 1, 'episodes': []})['episodes'].append(entry)
     item['seasons'] = sorted(seasons.values(), key=lambda s: _plain_number(s['number']) or 0)
     return item
+
+
+@app.post('/catalog/items/{item_id}/vote')
+async def catalog_item_vote(item_id: str, like: int = 1, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """Cast a thumbs up/down vote. KinoPub's own vote endpoint is a GET with
+    query params (`v1/items/vote?id=&like=`) - exposed here as a POST since
+    it's a mutation from our side, regardless of how upstream models it."""
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    payload = await kino_get(session, 'v1/items/vote', {'id': item_id, 'like': 1 if like else 0})
+    return {
+        'voted': bool(payload.get('voted')),
+        'positive': int(_plain_number(payload.get('positive')) or 0),
+        'negative': int(_plain_number(payload.get('negative')) or 0),
+        'rating': int(_plain_number(payload.get('rating')) or 0),
+    }
 
 
 @app.get('/catalog/items/{item_id}/play')

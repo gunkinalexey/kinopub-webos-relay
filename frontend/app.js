@@ -52,7 +52,20 @@ function watchedStatus(item){var id=String(item&&item.id||'');if(item&&item.watc
 // (0/absent for a movie) plus a real frame grabbed from that episode's file.
 // Neither exists on plain catalogue items, so this is a no-op there.
 function historyEpisodeTag(item){var season=Number(item.history_season)||0,episode=Number(item.history_episode)||0;if(!season||!episode)return '';return 'S'+pad2(season)+'E'+pad2(episode)+(item.media_title?' · '+item.media_title:'');}
-function card(item){var p=ratings(item),status=watchedStatus(item),b=document.createElement('button');b.className='media-card focusable';var mark=status===1?'<div class="watched-overlay"><span>ПРОСМОТРЕНО</span></div>':(status===0?'<div class="continue-overlay"><span>ПРОДОЛЖИТЬ</span></div>':'');var episodeTag=historyEpisodeTag(item),subtitle=episodeTag||item.original_title||'';var useFrame=episodeTag&&item.episode_thumbnail&&(!state.settings||state.settings.history_episode_frames!==false);b.innerHTML='<div class="poster-art">'+mark+'<div class="poster-badges"><span title="Субтитры"><svg><use xlink:href="#i-subtitles"></use></svg></span><span title="Dolby"><svg><use xlink:href="#i-dolby"></use></svg></span><span title="HD"><svg><use xlink:href="#i-hd"></use></svg></span></div><div class="poster-ratings"><span><svg><use xlink:href="#i-thumb"></use></svg>'+p[0]+'</span><span><svg><use xlink:href="#i-imdb"></use></svg>'+p[1]+'</span><span><svg><use xlink:href="#i-kp"></use></svg>'+p[2]+'</span></div></div><div class="item-title">'+esc(item.title||'')+'</div><div class="item-author">'+esc(subtitle)+'</div>';var poster=b.querySelector('.poster-art');if(poster)poster.style.background=bgCss(useFrame?item.episode_thumbnail:item.poster,'poster',useFrame?item.poster:'');b.onclick=function(){state.current=item;openDetails(item);};b.onfocus=function(){state.current=item;};return b;}
+// The catalogue *list* payload (unlike a single item's own detail/media
+// fetch) never carries subtitle info - only `ac3` (Dolby) and `quality`
+// (resolution) are real per-item fields there. A static "Субтитры" icon that
+// showed on every card regardless of the actual title was outright wrong;
+// better to show nothing for what we can't know than fake data for it.
+function posterBadges(item){
+ var parts=[];
+ if(item.has_dolby)parts.push('<span title="Dolby"><svg><use xlink:href="#i-dolby"></use></svg></span>');
+ var q=Number(item.quality)||0;
+ if(q>=2160)parts.push('<span title="4K">4K</span>');
+ else if(q>=720)parts.push('<span title="HD"><svg><use xlink:href="#i-hd"></use></svg></span>');
+ return parts.length?'<div class="poster-badges">'+parts.join('')+'</div>':'';
+}
+function card(item){var p=ratings(item),status=watchedStatus(item),b=document.createElement('button');b.className='media-card focusable';var mark=status===1?'<div class="watched-overlay"><span>ПРОСМОТРЕНО</span></div>':(status===0?'<div class="continue-overlay"><span>ПРОДОЛЖИТЬ</span></div>':'');var episodeTag=historyEpisodeTag(item),subtitle=episodeTag||item.original_title||'';var useFrame=episodeTag&&item.episode_thumbnail&&(!state.settings||state.settings.history_episode_frames!==false);b.innerHTML='<div class="poster-art">'+mark+posterBadges(item)+'<div class="poster-ratings"><span><svg><use xlink:href="#i-thumb"></use></svg>'+p[0]+'</span><span><svg><use xlink:href="#i-imdb"></use></svg>'+p[1]+'</span><span><svg><use xlink:href="#i-kp"></use></svg>'+p[2]+'</span></div></div><div class="item-title">'+esc(item.title||'')+'</div><div class="item-author">'+esc(subtitle)+'</div>';var poster=b.querySelector('.poster-art');if(poster)poster.style.background=bgCss(useFrame?item.episode_thumbnail:item.poster,'poster',useFrame?item.poster:'');b.onclick=function(){state.current=item;openDetails(item);};b.onfocus=function(){state.current=item;};return b;}
 function renderTop(){var cfg=routes[state.route]||routes.popular,root=$('catalogTop');root.innerHTML='';if(cfg.mode==='tabs'){var row=document.createElement('div');row.className='tab-row';var tabs=[['popular','Популярные'],['new','Свежие'],['hot','Горячие']];for(var i=0;i<tabs.length;i++){var bt=document.createElement('button');bt.className='focusable catalog-tab'+(state.route===tabs[i][0]?' active':'');bt.textContent=tabs[i][1];bt.onclick=(function(r){return function(){route(r);};}(tabs[i][0]));row.appendChild(bt);}root.appendChild(row);return;}var head=document.createElement('div');head.className='catalog-title-row';var title='<h3>';if(cfg.show3d)title+='<button class="focusable title-link'+(state.route!=='3d'?' title-current':'')+'" data-route-inline="movie">Фильмы</button><span class="title-sep">&nbsp;</span><button class="focusable title-link'+(state.route==='3d'?' title-current':'')+'" data-route-inline="3d">3D</button>';else title+=esc(cfg.title);title+='</h3><button id="filterToggle" class="focusable filter-toggle">Фильтры ▾</button>';head.innerHTML=title;root.appendChild(head);var m=head.querySelector('[data-route-inline="movie"]');if(m)m.onclick=function(){route('movie');};var f=head.querySelector('[data-route-inline="3d"]');if(f)f.onclick=function(){route('3d');};var t=head.querySelector('#filterToggle');if(t)t.onclick=toggleFilters;}
 function toggleFilters(){var old=$('filterPanel');if(old){old.parentNode.removeChild(old);return;}var panel=document.createElement('div');panel.id='filterPanel';panel.className='filter-panel';var labels=['Жанр','Страна','Год','Качество','Субтитры','Сортировка'];for(var i=0;i<labels.length;i++)panel.innerHTML+='<label>'+labels[i]+'<select class="focusable"><option>Любые</option></select></label>';$('catalogTop').appendChild(panel);setTimeout(focusFirst,10);}
 // The grid is CSS auto-fill (`repeat(auto-fill,minmax(165px,1fr))`), so the
@@ -315,14 +328,35 @@ function renderDetailsActions(item){
  var previous=$('detailsPlay');if(previous)previous.removeAttribute('id');
  var first=root.querySelector('button');if(first)first.id='detailsPlay';
 }
+// KinoPub's real vote endpoint (`v1/items/vote?id=&like=`) returns the
+// updated totals straight back, so the buttons just submit and repaint from
+// that response - no separate "did I already vote" field exists, so the
+// only thing worth guarding against locally is a double-click spamming two
+// votes for one click.
+function renderVotes(item){
+ var box=$('detailsVotes'),votes=item.votes||{},up=Number(votes.positive)||0,down=Number(votes.negative)||0;
+ if(!up&&!down){box.innerHTML='';return;}
+ box.innerHTML='<button class="focusable details-vote details-vote-up" title="Нравится">▲ <span class="vote-count">'+esc(up)+'</span></button><button class="focusable details-vote details-vote-down" title="Не нравится">▼ <span class="vote-count">'+esc(down)+'</span></button>';
+ var upBtn=box.querySelector('.details-vote-up'),downBtn=box.querySelector('.details-vote-down');
+ function castVote(like,chosenBtn){
+  if(upBtn.disabled||downBtn.disabled)return;
+  upBtn.disabled=true;downBtn.disabled=true;
+  KPApi.vote(item.id,like).then(function(result){
+   upBtn.querySelector('.vote-count').textContent=result.positive;
+   downBtn.querySelector('.vote-count').textContent=result.negative;
+   if(result.voted)chosenBtn.classList.add('chosen');
+  }).catch(function(){upBtn.disabled=false;downBtn.disabled=false;});
+ }
+ upBtn.onclick=function(){castVote(1,upBtn);};
+ downBtn.onclick=function(){castVote(0,downBtn);};
+}
 function renderDetails(item){
  state.current=item;
  $('detailsTitle').textContent=item.title||'';
  $('detailsOriginal').textContent=[item.original_title||'',item.year||''].filter(Boolean).join(' · ');
  $('detailsBackdrop').style.background=bgCss(item.backdrop||item.poster,'backdrop',item.backdrop_fallback||item.poster);
  $('detailsPoster').style.background=bgCss(item.poster,'poster');
- var votes=item.votes||{},up=Number(votes.positive)||0,down=Number(votes.negative)||0;
- $('detailsVotes').innerHTML=(up||down)?'<div class="details-vote details-vote-up">▲ '+esc(up)+'</div><div class="details-vote details-vote-down">▼ '+esc(down)+'</div>':'';
+ renderVotes(item);
  renderDetailsActions(item);
  renderDetailsEpisodes(item);
  renderDetailsTabs(item);
