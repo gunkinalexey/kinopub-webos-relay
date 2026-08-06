@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.77', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.78', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -1047,8 +1047,11 @@ async def _history_fetch(session: Dict[str, Any], api_page: int, perpage: int) -
 
 
 async def _history_scan(session: Dict[str, Any], sid: str, section: str) -> List[Dict[str, Any]]:
-    """Every history item of one type, walking upstream pages until exhausted."""
-    key = f'{hashlib.sha256(sid.encode("utf-8")).hexdigest()[:16]}:{section}'
+    """Every history item of one type, walking upstream pages until exhausted.
+
+    An empty ``section`` collects every type instead of filtering - used by
+    /catalog/watching, which wants both movies and series."""
+    key = f'{hashlib.sha256(sid.encode("utf-8")).hexdigest()[:16]}:{section or "all"}'
     cached = history_cache.get(key)
     if cached and cached['at'] + HISTORY_CACHE_TTL > time.time():
         return cached['items']
@@ -1060,13 +1063,13 @@ async def _history_scan(session: Dict[str, Any], sid: str, section: str) -> List
         scanned += len(entries)
         for entry in entries:
             item = _history_entry_item(entry)
-            if item and str(item.get('type') or '') == section:
+            if item and (not section or str(item.get('type') or '') == section):
                 collected.append(item)
         if len(entries) < HISTORY_SCAN_PERPAGE:
             break
     history_cache[key] = {'at': time.time(), 'items': collected}
     log_event('catalog', 'History scanned for a type filter', {
-        'type': section, 'matched': len(collected), 'scanned': scanned,
+        'type': section or 'all', 'matched': len(collected), 'scanned': scanned,
     })
     return collected
 
@@ -1117,6 +1120,32 @@ async def catalog_history(page: int = 0, perpage: int = 48, type: str = '', kp_s
         'has_next': (page + 1 < totals['total_pages']) if totals['total_pages'] > 1 else (len(entries) >= perpage),
         'items': items,
     }
+
+
+@app.get('/catalog/watching')
+async def catalog_watching(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """"Я смотрю" ("I'm watching") - one card per title with any watch
+    history, most-recently-watched first.
+
+    KinoPub silently ignores a `watching`/`subscribed` filter on v1/items
+    (same story as v1/history's `type` param), so there's no server-side
+    equivalent to ask for directly. Built the same way /catalog/history's
+    per-type filter already is: scan history (every type, not just one) and
+    reduce client-side - history is already newest-first, so keeping the
+    first entry seen per title keeps the most recent watch.
+    """
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    entries = await _history_scan(session, kp_session or '', '')
+    seen: set = set()
+    items: List[Dict[str, Any]] = []
+    for entry in entries:
+        item_id = str(entry.get('id') or '')
+        if not item_id or item_id in seen:
+            continue
+        seen.add(item_id)
+        items.append(entry)
+    log_event('catalog', 'Watching list loaded', {'count': len(items), 'scanned': len(entries)})
+    return {'items': items, 'total_items': len(items)}
 
 
 @app.get('/catalog/autocomplete')

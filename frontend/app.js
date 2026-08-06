@@ -27,6 +27,7 @@ var routes={
  movie:{title:'Фильмы',mode:'category',section:'movie',feed:'all',show3d:true},
  '3d':{title:'3D Фильмы',mode:'category',section:'3d',feed:'all',show3d:true},
  history:{title:'История',mode:'history',section:'history',feed:'all'},
+ watching:{title:'Я смотрю',mode:'watching'},
  serial:{title:'Сериалы',mode:'category',section:'serial',feed:'all'},
  anime:{title:'Аниме',mode:'category',section:'anime',feed:'all'},
  concert:{title:'Концерты',mode:'category',section:'concert',feed:'all'},
@@ -145,9 +146,31 @@ function renderHistory(cfg){
   $('catalogPagination').classList.add('hidden');
  });
 }
+// "Я смотрю" - one card per title with any watch history, most recent
+// first. Same underlying scan as /catalog/history's per-type filter, just
+// deduped to one row per title instead of one per episode watched.
+function updateWatchingCount(n){var chip=$('watchingCount');if(!chip)return;chip.textContent=n>0?String(n):'';chip.classList.toggle('hidden',!n);}
+function renderWatching(cfg){
+ renderTop();
+ var g=$('catalogGrid');
+ g.className='poster-grid';$('catalogPagination').classList.add('hidden');
+ g.innerHTML='<p class="empty-state">Загружаем…</p>';
+ var requestId=++state.catalogRequest;
+ KPApi.watchingList().then(function(data){
+  if(requestId!==state.catalogRequest)return;
+  var items=(data&&data.items)||[];
+  renderCatalogItems(items);
+  updateWatchingCount(items.length);
+ }).catch(function(err){
+  if(requestId!==state.catalogRequest)return;
+  g.innerHTML='<p class="empty-state">Не удалось загрузить раздел: '+esc(err&&err.message?err.message:String(err))+'</p>';
+  KPApi.report('Watching list failed',{error:String(err)},'catalog').catch(function(){});
+ });
+}
 function renderCatalog(){
  var cfg=routes[state.route]||routes.popular;
  if(cfg.mode==='history'){renderHistory(cfg);return;}
+ if(cfg.mode==='watching'){renderWatching(cfg);return;}
  renderTop();
  var g=$('catalogGrid'),page=currentCatalogPage(cfg);
  g.className='poster-grid';
