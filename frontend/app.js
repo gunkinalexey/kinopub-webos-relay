@@ -48,7 +48,11 @@ function ratingText(value){var n=parseFloat(value);if(!isFinite(n)||n<0||n>10)re
 function kinopubText(item){return ratingText(item.rating);}
 function ratings(item){return [kinopubText(item),ratingText(item.imdb_rating),ratingText(item.kinopoisk_rating)];}
 function watchedStatus(item){var id=String(item&&item.id||'');if(item&&item.watched===1)return 1;if(item&&item.watched===0)return 0;if(state.watchedMap[id]!==undefined)return state.watchedMap[id];return -1;}
-function card(item){var p=ratings(item),status=watchedStatus(item),b=document.createElement('button');b.className='media-card focusable';var mark=status===1?'<div class="watched-overlay"><span>ПРОСМОТРЕНО</span></div>':(status===0?'<div class="continue-overlay"><span>ПРОДОЛЖИТЬ</span></div>':'');b.innerHTML='<div class="poster-art">'+mark+'<div class="poster-badges"><span title="Субтитры"><svg><use xlink:href="#i-subtitles"></use></svg></span><span title="Dolby"><svg><use xlink:href="#i-dolby"></use></svg></span><span title="HD"><svg><use xlink:href="#i-hd"></use></svg></span></div><div class="poster-ratings"><span><svg><use xlink:href="#i-thumb"></use></svg>'+p[0]+'</span><span><svg><use xlink:href="#i-imdb"></use></svg>'+p[1]+'</span><span><svg><use xlink:href="#i-kp"></use></svg>'+p[2]+'</span></div></div><div class="item-title">'+esc(item.title||'')+'</div><div class="item-author">'+esc(item.original_title||'')+'</div>';var poster=b.querySelector('.poster-art');if(poster)poster.style.background=bgCss(item.poster,'poster');b.onclick=function(){state.current=item;openDetails(item);};b.onfocus=function(){state.current=item;};return b;}
+// History entries carry the season/episode this specific view was of
+// (0/absent for a movie) plus a real frame grabbed from that episode's file.
+// Neither exists on plain catalogue items, so this is a no-op there.
+function historyEpisodeTag(item){var season=Number(item.history_season)||0,episode=Number(item.history_episode)||0;if(!season||!episode)return '';return 'S'+pad2(season)+'E'+pad2(episode)+(item.media_title?' · '+item.media_title:'');}
+function card(item){var p=ratings(item),status=watchedStatus(item),b=document.createElement('button');b.className='media-card focusable';var mark=status===1?'<div class="watched-overlay"><span>ПРОСМОТРЕНО</span></div>':(status===0?'<div class="continue-overlay"><span>ПРОДОЛЖИТЬ</span></div>':'');var episodeTag=historyEpisodeTag(item),subtitle=episodeTag||item.original_title||'';var useFrame=episodeTag&&item.episode_thumbnail&&(!state.settings||state.settings.history_episode_frames!==false);b.innerHTML='<div class="poster-art">'+mark+'<div class="poster-badges"><span title="Субтитры"><svg><use xlink:href="#i-subtitles"></use></svg></span><span title="Dolby"><svg><use xlink:href="#i-dolby"></use></svg></span><span title="HD"><svg><use xlink:href="#i-hd"></use></svg></span></div><div class="poster-ratings"><span><svg><use xlink:href="#i-thumb"></use></svg>'+p[0]+'</span><span><svg><use xlink:href="#i-imdb"></use></svg>'+p[1]+'</span><span><svg><use xlink:href="#i-kp"></use></svg>'+p[2]+'</span></div></div><div class="item-title">'+esc(item.title||'')+'</div><div class="item-author">'+esc(subtitle)+'</div>';var poster=b.querySelector('.poster-art');if(poster)poster.style.background=bgCss(useFrame?item.episode_thumbnail:item.poster,'poster',useFrame?item.poster:'');b.onclick=function(){state.current=item;openDetails(item);};b.onfocus=function(){state.current=item;};return b;}
 function renderTop(){var cfg=routes[state.route]||routes.popular,root=$('catalogTop');root.innerHTML='';if(cfg.mode==='tabs'){var row=document.createElement('div');row.className='tab-row';var tabs=[['popular','Популярные'],['new','Свежие'],['hot','Горячие']];for(var i=0;i<tabs.length;i++){var bt=document.createElement('button');bt.className='focusable catalog-tab'+(state.route===tabs[i][0]?' active':'');bt.textContent=tabs[i][1];bt.onclick=(function(r){return function(){route(r);};}(tabs[i][0]));row.appendChild(bt);}root.appendChild(row);return;}var head=document.createElement('div');head.className='catalog-title-row';var title='<h3>';if(cfg.show3d)title+='<button class="focusable title-link'+(state.route!=='3d'?' title-current':'')+'" data-route-inline="movie">Фильмы</button><span class="title-sep">&nbsp;</span><button class="focusable title-link'+(state.route==='3d'?' title-current':'')+'" data-route-inline="3d">3D</button>';else title+=esc(cfg.title);title+='</h3><button id="filterToggle" class="focusable filter-toggle">Фильтры ▾</button>';head.innerHTML=title;root.appendChild(head);var m=head.querySelector('[data-route-inline="movie"]');if(m)m.onclick=function(){route('movie');};var f=head.querySelector('[data-route-inline="3d"]');if(f)f.onclick=function(){route('3d');};var t=head.querySelector('#filterToggle');if(t)t.onclick=toggleFilters;}
 function toggleFilters(){var old=$('filterPanel');if(old){old.parentNode.removeChild(old);return;}var panel=document.createElement('div');panel.id='filterPanel';panel.className='filter-panel';var labels=['Жанр','Страна','Год','Качество','Субтитры','Сортировка'];for(var i=0;i<labels.length;i++)panel.innerHTML+='<label>'+labels[i]+'<select class="focusable"><option>Любые</option></select></label>';$('catalogTop').appendChild(panel);setTimeout(focusFirst,10);}
 // The grid is CSS auto-fill (`repeat(auto-fill,minmax(165px,1fr))`), so the
@@ -219,6 +223,30 @@ function episodeCard(item,entry,index){
  return b;
 }
 function pad2(v){var n=Number(v);return (isFinite(n)&&n<10&&n>=0?'0':'')+(isFinite(n)?n:v);}
+function chevronSvg(dir){return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="'+(dir==='prev'?'M15 5l-7 7 7 7':'M9 5l7 7-7 7')+'"/></svg>';}
+// A long season turns the strip wider than the screen; a native horizontal
+// scrollbar next to an otherwise custom UI reads as a stray OS widget, and a
+// remote has no way to drag one anyway. Wrap the strip in two arrow buttons
+// that page it by roughly one screenful instead, hiding each arrow once
+// there's nothing further that way rather than just disabling it in place.
+function wireEpisodeCarousel(strip){
+ var wrap=document.createElement('div');wrap.className='episode-carousel';
+ var prev=document.createElement('button');prev.className='focusable episode-nav prev';prev.setAttribute('aria-label','Предыдущие серии');prev.innerHTML=chevronSvg('prev');
+ var next=document.createElement('button');next.className='focusable episode-nav next';next.setAttribute('aria-label','Следующие серии');next.innerHTML=chevronSvg('next');
+ wrap.appendChild(strip);wrap.appendChild(prev);wrap.appendChild(next);
+ function pageWidth(){return Math.max(232,strip.clientWidth-232);}
+ prev.onclick=function(){strip.scrollBy({left:-pageWidth(),behavior:'smooth'});};
+ next.onclick=function(){strip.scrollBy({left:pageWidth(),behavior:'smooth'});};
+ function refresh(){
+  var overflowing=strip.scrollWidth>strip.clientWidth+2;
+  prev.classList.toggle('hidden',!overflowing||strip.scrollLeft<=2);
+  next.classList.toggle('hidden',!overflowing||strip.scrollLeft>=strip.scrollWidth-strip.clientWidth-2);
+ }
+ strip.addEventListener('scroll',refresh);
+ wrap.refresh=refresh;
+ setTimeout(refresh,0);
+ return wrap;
+}
 // Three shapes, matched to what KinoPub actually sent:
 //  - 2+ real seasons  -> season pills, each with its own episode strip;
 //  - 1 season (or none, e.g. a flat multi-file miniseries) with 2+ episodes
@@ -231,6 +259,7 @@ function renderDetailsEpisodes(item){
   var bar=document.createElement('div');bar.className='details-seasons';
   var label=document.createElement('span');label.className='details-seasons-label';label.textContent='Сезоны:';bar.appendChild(label);
   var strip=document.createElement('div');strip.className='episode-strip';
+  var carousel=wireEpisodeCarousel(strip);
   function showSeason(index){
    state.detailsSeason=index;
    var pills=bar.querySelectorAll('.season-pill');
@@ -238,6 +267,7 @@ function renderDetailsEpisodes(item){
    strip.innerHTML='';
    var episodes=(seasons[index]&&seasons[index].episodes)||[];
    for(var e=0;e<episodes.length;e++)strip.appendChild(episodeCard(item,episodes[e],e));
+   strip.scrollLeft=0;carousel.refresh();
   }
   for(var s=0;s<seasons.length;s++){
    var pill=document.createElement('button');pill.className='focusable season-pill';pill.setAttribute('data-season',String(s));
@@ -245,7 +275,7 @@ function renderDetailsEpisodes(item){
    pill.onclick=(function(index){return function(){showSeason(index);};}(s));
    bar.appendChild(pill);
   }
-  root.appendChild(bar);root.appendChild(strip);
+  root.appendChild(bar);root.appendChild(carousel);
   var start=Number(state.detailsSeason);
   showSeason(isFinite(start)&&seasons[start]?start:0);
   return;
@@ -254,7 +284,7 @@ function renderDetailsEpisodes(item){
  if(episodes.length<=1)return;
  var flatStrip=document.createElement('div');flatStrip.className='episode-strip';
  for(var m=0;m<episodes.length;m++)flatStrip.appendChild(episodeCard(item,episodes[m],m));
- root.appendChild(flatStrip);
+ root.appendChild(wireEpisodeCarousel(flatStrip));
 }
 // Saved resume points for the open title. Keyed by episode id, so a series
 // continues the episode that was actually left unfinished.
@@ -515,7 +545,7 @@ function handleSessionExpired(){if(state.authRequired)return;state.authenticated
 function startAuth(){clearAuth();$('authModal').classList.remove('hidden');$('authIntro').classList.add('hidden');$('authStart').classList.add('hidden');$('authCodePanel').classList.remove('hidden');$('authRestart').classList.add('hidden');$('verificationUri').textContent='';$('userCode').textContent='------';$('authCountdown').textContent='';$('authStatus').textContent='Получаем код…';KPApi.startAuth().then(function(d){$('verificationUri').textContent=d.verification_uri;$('userCode').textContent=d.user_code;var left=d.expires_in||300;$('authStatus').textContent='Ожидаем подтверждение';$('authCountdown').textContent='Код действует ещё '+left+' сек.';state.authTick=setInterval(function(){left--;$('authCountdown').textContent='Код действует ещё '+left+' сек.';if(left<=0){clearAuth();$('authStatus').textContent='Код истёк';$('authRestart').classList.remove('hidden');$('authRestart').focus();}},500);state.authPoll=setInterval(function(){KPApi.pollAuth(d.code).then(function(x){if(x.status==='authorized'){clearAuth();$('authStatus').textContent='Устройство подключено';setTimeout(initializeAuthenticatedApp,700);}}).catch(function(e){KPApi.status().then(function(st){if(st&&st.authenticated){clearAuth();$('authStatus').textContent='Устройство подключено';setTimeout(initializeAuthenticatedApp,300);return;}clearAuth();$('authStatus').textContent='Ошибка: '+e.message;$('authRestart').classList.remove('hidden');}).catch(function(){clearAuth();$('authStatus').textContent='Ошибка: '+e.message;$('authRestart').classList.remove('hidden');});});},Math.max(5,d.interval||5)*1000);}).catch(function(e){$('authStatus').textContent='Ошибка: '+e.message;$('authRestart').classList.remove('hidden');});}
 function clearAuth(){if(state.authTick)clearInterval(state.authTick);if(state.authPoll)clearInterval(state.authPoll);state.authTick=state.authPoll=null;}
 function closeAuth(){if(state.authRequired)return;clearAuth();$('authModal').classList.add('hidden');}
-function loadSettings(){KPApi.settings().then(function(s){state.settings=s;var icon=normalizeAppIcon(s.app_icon||'kinopub');state.settings.app_icon=icon;$('setQuality').value=s.quality;$('setMode').value=s.stream_mode;$('setAudio').value=s.audio_language;$('setSubs').value=s.subtitles;applySubtitleSize(s.subtitle_size);$('setFullscreen').value=playerFullscreenMode();$('setAutoplay').checked=!!s.autoplay_next;$('setMotion').checked=!!s.reduce_motion;var radios=document.querySelectorAll('input[name="appIcon"]');for(var i=0;i<radios.length;i++)radios[i].checked=radios[i].value===icon;applyBranding(icon);document.body.classList.toggle('reduce-motion',!!s.reduce_motion);});}
+function loadSettings(){KPApi.settings().then(function(s){state.settings=s;var icon=normalizeAppIcon(s.app_icon||'kinopub');state.settings.app_icon=icon;$('setQuality').value=s.quality;$('setMode').value=s.stream_mode;$('setAudio').value=s.audio_language;$('setSubs').value=s.subtitles;applySubtitleSize(s.subtitle_size);$('setFullscreen').value=playerFullscreenMode();$('setAutoplay').checked=!!s.autoplay_next;$('setMotion').checked=!!s.reduce_motion;$('setHistoryFrames').checked=s.history_episode_frames!==false;var radios=document.querySelectorAll('input[name="appIcon"]');for(var i=0;i<radios.length;i++)radios[i].checked=radios[i].value===icon;applyBranding(icon);document.body.classList.toggle('reduce-motion',!!s.reduce_motion);});}
 
 function clearApplicationCache(){
  state.catalogCache={};
@@ -529,7 +559,7 @@ function clearApplicationCache(){
  KPApi.report('Frontend cache cleared',{cache_version:state.cacheVersion},'cache').catch(function(){});
  setTimeout(function(){route('popular');},350);
 }
-function saveSettings(){var s={quality:$('setQuality').value,stream_mode:$('setMode').value,audio_language:$('setAudio').value,subtitles:$('setSubs').value,subtitle_size:normalizeSubtitleSize($('setSubSize').value),player_fullscreen:$('setFullscreen').value,autoplay_next:$('setAutoplay').checked,reduce_motion:$('setMotion').checked,app_icon:selectedAppIcon()};KPApi.saveSettings(s).then(function(x){state.settings=x;x.app_icon=normalizeAppIcon(x.app_icon||'kinopub');applyBranding(x.app_icon);applySubtitleSize(x.subtitle_size);$('settingsStatus').textContent='Сохранено';document.body.classList.toggle('reduce-motion',!!x.reduce_motion);});}
+function saveSettings(){var s={quality:$('setQuality').value,stream_mode:$('setMode').value,audio_language:$('setAudio').value,subtitles:$('setSubs').value,subtitle_size:normalizeSubtitleSize($('setSubSize').value),player_fullscreen:$('setFullscreen').value,autoplay_next:$('setAutoplay').checked,reduce_motion:$('setMotion').checked,history_episode_frames:$('setHistoryFrames').checked,app_icon:selectedAppIcon()};KPApi.saveSettings(s).then(function(x){state.settings=x;x.app_icon=normalizeAppIcon(x.app_icon||'kinopub');applyBranding(x.app_icon);applySubtitleSize(x.subtitle_size);$('settingsStatus').textContent='Сохранено';document.body.classList.toggle('reduce-motion',!!x.reduce_motion);});}
 function hideSuggestions(){var box=$('searchSuggestions');box.classList.add('hidden');box.innerHTML='';$('searchInput').setAttribute('aria-expanded','false');state.suggestionIndex=-1;}
 function suggestionRows(){return $('searchSuggestions').querySelectorAll('.search-suggestion');}
 function openSuggestion(item){if(!item)return;$('searchInput').value=item.value||'';hideSuggestions();if(item.id){state.current={id:String(item.id),title:item.value||''};openDetails(state.current);return;}doSearch('title',cleanSearchQuery(item.value||''));}

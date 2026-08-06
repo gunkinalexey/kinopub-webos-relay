@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.74', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.75', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -155,6 +155,7 @@ class SettingsPayload(BaseModel):
     subtitle_size: int = 100
     autoplay_next: bool = True
     reduce_motion: bool = False
+    history_episode_frames: bool = True
     app_icon: str = 'kinopub'
     # off | layer | video. 'video' fullscreens the media element itself, which
     # is what usually promotes it to the hardware video plane (and with it HDR
@@ -1012,10 +1013,24 @@ def _history_entry_item(entry: Any) -> Optional[Dict[str, Any]]:
     if not item['id']:
         return None
     media = entry.get('media') if isinstance(entry.get('media'), dict) else {}
-    watched = _plain_number(_pick_first(entry, ['created', 'updated', 'time', 'date', 'last_seen', 'watched_at']))
+    # `last_seen`/`first_seen` are the real Unix timestamps of when this was
+    # watched. `time` and `counter` are also present on every entry (seconds
+    # actually watched, and a view counter) and used to get picked first here,
+    # which read e.g. "373 seconds watched" as "watched at 00:06:13 on 1 Jan
+    # 1970" - every entry landed in the same bogus day bucket regardless of
+    # when it was actually watched, which looked like history had frozen.
+    watched = _plain_number(_pick_first(entry, ['last_seen', 'first_seen']))
     item['watched_at'] = int(watched) if watched else 0
     item['media_title'] = str(media.get('title') or '') if media else ''
     item['director'] = ', '.join(_name_list(raw.get('director') or raw.get('directors')))
+    # `snumber`/`number` identify which season/episode this entry is for a
+    # series (0/absent for a movie); `thumbnail` is a real frame grabbed from
+    # that specific episode's file, not the show's generic poster.
+    season = media.get('snumber') if media else None
+    episode = media.get('number') if media else None
+    item['history_season'] = int(season) if isinstance(season, (int, float)) and season else 0
+    item['history_episode'] = int(episode) if isinstance(episode, (int, float)) and episode else 0
+    item['episode_thumbnail'] = str(media.get('thumbnail') or '') if media else ''
     return item
 
 
