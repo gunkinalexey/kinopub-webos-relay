@@ -24,7 +24,9 @@ fi
 
 backend_changed="$(git status --porcelain -- backend | head -1)"
 
-git add -A || exit 0
+# stderr is silenced: on Windows every file trips a CRLF advisory that would
+# otherwise bury the hook's own output.
+git add -A 2>/dev/null || exit 0
 if git diff --cached --quiet; then
   exit 0
 fi
