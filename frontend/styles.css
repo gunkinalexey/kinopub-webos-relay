@@ -21,7 +21,7 @@
 
 /* v0.9.9: KinoPub-style autocomplete and full search page */
 .search-head{position:relative;z-index:40}
-.search-suggestions{position:absolute;left:0;right:44px;top:39px;z-index:120;max-height:350px;overflow-y:auto;background:#fff;border:1px solid #c9ccd2;box-shadow:0 8px 24px rgba(0,0,0,.38);color:#171a20}
+.search-suggestions{position:absolute;left:0;right:44px;top:39px;z-index:120;max-height:490px;overflow-y:auto;background:#fff;border:1px solid #c9ccd2;box-shadow:0 8px 24px rgba(0,0,0,.38);color:#171a20}
 .search-suggestion{display:block;width:100%;border:0;background:#fff;color:#1c2028;text-align:left;padding:8px 18px;font-size:15px;line-height:1.25;white-space:normal}
 .search-suggestion:hover,.search-suggestion.active,.search-suggestion:focus{background:#e8edf5;box-shadow:none;transform:none}
 .search-suggestion strong{font-weight:700;color:#10141b}
