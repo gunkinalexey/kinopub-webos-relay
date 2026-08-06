@@ -182,46 +182,56 @@ function renderDetailsTabs(item){
  for(var i=0;i<tabs.length;i++){var b=document.createElement('button');b.className='focusable details-tab';b.setAttribute('data-tab',tabs[i].id);b.textContent=tabs[i].title;b.onclick=(function(id){return function(){select(id);};}(tabs[i].id));root.appendChild(b);}
  select(state.detailsTab||'plot');
 }
+// A season picker only makes sense when the title genuinely has more than one
+// season; a movie (or KinoPub's own "season 1" default for unnumbered media)
+// must not grow a one-pill selector.
+function hasMultipleSeasons(item){return !!(item.seasons&&item.seasons.length>1);}
 function episodeCard(item,entry,index){
  var b=document.createElement('button');b.className='focusable episode-card';
  var number=entry.episode||entry.number||index+1,season=entry.season||1;
- var code=(item.seasons&&item.seasons.length)?('S'+pad2(season)+'E'+pad2(number)):'';
+ var code=hasMultipleSeasons(item)?('S'+pad2(season)+'E'+pad2(number)):'';
  b.innerHTML='<div class="episode-thumb"><div class="episode-badge">Эпизод '+esc(number)+'</div><div class="episode-play">▶</div></div><div class="episode-name">'+esc(entry.title||('Серия '+number))+'</div>'+(code?'<div class="episode-code">'+esc(code)+'</div>':'');
  var thumb=b.querySelector('.episode-thumb');if(thumb&&entry.thumbnail)thumb.style.background=bgCss(entry.thumbnail,'poster');
  b.onclick=function(){play(item,entry);};
  return b;
 }
 function pad2(v){var n=Number(v);return (isFinite(n)&&n<10&&n>=0?'0':'')+(isFinite(n)?n:v);}
+// Three shapes, matched to what KinoPub actually sent:
+//  - 2+ real seasons  -> season pills, each with its own episode strip;
+//  - 1 season (or none, e.g. a flat multi-file miniseries) with 2+ episodes
+//    -> a single flat strip, no season pills;
+//  - a single file (most movies) -> nothing, the Watch button is enough.
 function renderDetailsEpisodes(item){
  var root=$('detailsEpisodes');root.innerHTML='';
  var seasons=item.seasons||[];
- if(!seasons.length){
-  var extra=(item.media||[]).length>1?item.media:[];
-  if(!extra.length)return;
+ if(seasons.length>1){
+  var bar=document.createElement('div');bar.className='details-seasons';
+  var label=document.createElement('span');label.className='details-seasons-label';label.textContent='Сезоны:';bar.appendChild(label);
   var strip=document.createElement('div');strip.className='episode-strip';
-  for(var m=0;m<extra.length;m++)strip.appendChild(episodeCard(item,extra[m],m));
-  root.appendChild(strip);return;
+  function showSeason(index){
+   state.detailsSeason=index;
+   var pills=bar.querySelectorAll('.season-pill');
+   for(var i=0;i<pills.length;i++)pills[i].classList.toggle('active',Number(pills[i].getAttribute('data-season'))===index);
+   strip.innerHTML='';
+   var episodes=(seasons[index]&&seasons[index].episodes)||[];
+   for(var e=0;e<episodes.length;e++)strip.appendChild(episodeCard(item,episodes[e],e));
+  }
+  for(var s=0;s<seasons.length;s++){
+   var pill=document.createElement('button');pill.className='focusable season-pill';pill.setAttribute('data-season',String(s));
+   pill.textContent=String(seasons[s].number);
+   pill.onclick=(function(index){return function(){showSeason(index);};}(s));
+   bar.appendChild(pill);
+  }
+  root.appendChild(bar);root.appendChild(strip);
+  var start=Number(state.detailsSeason);
+  showSeason(isFinite(start)&&seasons[start]?start:0);
+  return;
  }
- var bar=document.createElement('div');bar.className='details-seasons';
- var label=document.createElement('span');label.className='details-seasons-label';label.textContent='Сезоны:';bar.appendChild(label);
- var strip=document.createElement('div');strip.className='episode-strip';
- function showSeason(index){
-  state.detailsSeason=index;
-  var pills=bar.querySelectorAll('.season-pill');
-  for(var i=0;i<pills.length;i++)pills[i].classList.toggle('active',Number(pills[i].getAttribute('data-season'))===index);
-  strip.innerHTML='';
-  var episodes=(seasons[index]&&seasons[index].episodes)||[];
-  for(var e=0;e<episodes.length;e++)strip.appendChild(episodeCard(item,episodes[e],e));
- }
- for(var s=0;s<seasons.length;s++){
-  var pill=document.createElement('button');pill.className='focusable season-pill';pill.setAttribute('data-season',String(s));
-  pill.textContent=String(seasons[s].number);
-  pill.onclick=(function(index){return function(){showSeason(index);};}(s));
-  bar.appendChild(pill);
- }
- root.appendChild(bar);root.appendChild(strip);
- var start=Number(state.detailsSeason);
- showSeason(isFinite(start)&&seasons[start]?start:0);
+ var episodes=seasons.length===1?(seasons[0].episodes||[]):(item.media||[]);
+ if(episodes.length<=1)return;
+ var flatStrip=document.createElement('div');flatStrip.className='episode-strip';
+ for(var m=0;m<episodes.length;m++)flatStrip.appendChild(episodeCard(item,episodes[m],m));
+ root.appendChild(flatStrip);
 }
 // Saved resume points for the open title. Keyed by episode id, so a series
 // continues the episode that was actually left unfinished.
@@ -232,7 +242,7 @@ function episodeProgress(entry){var id=String(entry&&(entry.id||entry.media_id)|
 function resumableRow(row){if(!row)return null;var pos=Number(row.position)||0,dur=Number(row.duration)||0;if(row.completed)return null;if(pos<30)return null;if(dur>0&&pos>dur-60)return null;return row;}
 function latestResumable(){var rows=progressRows();for(var i=0;i<rows.length;i++){var r=resumableRow(rows[i]);if(r)return r;}return null;}
 function episodeForRow(item,row){if(!row)return null;var id=String(row.episode_id||'');if(!id)return null;var media=detailsMediaList(item);for(var i=0;i<media.length;i++)if(String(media[i].id)===id)return media[i];return null;}
-function episodeLabel(item,entry){if(!entry)return '';var season=entry.season,number=entry.episode||entry.number;if(!(item.seasons&&item.seasons.length))return entry.title||'';return 'S'+pad2(season||1)+'E'+pad2(number||1)+(entry.title?' · '+entry.title:'');}
+function episodeLabel(item,entry){if(!entry)return '';var season=entry.season,number=entry.episode||entry.number;if(!hasMultipleSeasons(item))return entry.title||'';return 'S'+pad2(season||1)+'E'+pad2(number||1)+(entry.title?' · '+entry.title:'');}
 function loadItemProgress(item){state.detailsProgress=null;return KPApi.history(item.id).then(function(d){state.detailsProgress=d;if(state.current&&String(state.current.id)===String(item.id))renderDetailsActions(item);return d;}).catch(function(){return null;});}
 // Watch buttons. 'Continue' appears only when there is a mid-way position to
 // return to; otherwise a single plain 'Watch'.
