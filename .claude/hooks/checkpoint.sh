@@ -33,7 +33,7 @@ fi
 
 files="$(git diff --cached --name-only | wc -l | tr -d ' ')"
 summary="$(git diff --cached --name-only | sed 's#/.*##' | sort -u | paste -sd, -)"
-git commit -q -m "checkpoint: ${summary} ($(date '+%Y-%m-%d %H:%M'))" || exit 0
+git commit -q -m "checkpoint: ${summary} ($(date '+%Y-%m-%d %H:%M'))" 2>/dev/null || exit 0
 short="$(git rev-parse --short HEAD)"
 message="commit ${short} — ${files} file(s)"
 
