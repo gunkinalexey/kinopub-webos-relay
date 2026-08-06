@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.76', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.77', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -1267,6 +1267,43 @@ async def catalog_item_vote(item_id: str, like: int = 1, kp_session: Optional[st
         'positive': int(_plain_number(payload.get('positive')) or 0),
         'negative': int(_plain_number(payload.get('negative')) or 0),
         'rating': int(_plain_number(payload.get('rating')) or 0),
+    }
+
+
+@app.get('/catalog/items/{item_id}/watching')
+async def catalog_item_watching(item_id: str, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """KinoPub's own watched status for one title, straight from `v1/watching
+    ?id=` - a real per-video `status`/`time` (position), tracked across every
+    device the account has used, not just this client's local SQLite
+    progress. Cheap for a single title; unlike /watching/statuses (which
+    scans up to 20 pages of v1/history for the whole catalogue grid at once),
+    this has no bulk equivalent - it only ever takes one id."""
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    payload = await kino_get(session, 'v1/watching', {'id': item_id})
+    raw_item = payload.get('item') if isinstance(payload, dict) else {}
+    if not isinstance(raw_item, dict):
+        raw_item = {}
+    # A movie's `item` has a flat `videos` list; a series nests episodes
+    # under `seasons[].episodes[]` instead - there's no one shape to walk.
+    # `status` is -1 (never watched) / 0 (in progress) / 1 (watched) - a
+    # bare bool(status) would treat -1 as truthy and mark everything watched.
+    videos: List[Dict[str, Any]] = [v for v in (raw_item.get('videos') or []) if isinstance(v, dict)]
+    for season in (raw_item.get('seasons') or []):
+        if isinstance(season, dict):
+            videos.extend(v for v in (season.get('episodes') or []) if isinstance(v, dict))
+    episodes: Dict[str, Dict[str, Any]] = {}
+    for video in videos:
+        video_id = str(video.get('id') or '')
+        if not video_id:
+            continue
+        episodes[video_id] = {
+            'watched': video.get('status') == 1,
+            'position': int(_plain_number(video.get('time')) or 0),
+            'duration': int(_plain_number(video.get('duration')) or 0),
+        }
+    return {
+        'watched': raw_item.get('status') == 1,
+        'episodes': episodes,
     }
 
 

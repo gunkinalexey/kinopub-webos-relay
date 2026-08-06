@@ -234,7 +234,7 @@ function episodeCard(item,entry,index){
  // now marked on the episode's own card - the grid does this for whole
  // titles, and a multi-episode strip needs the same "seen this one already"
  // signal per card, not just for the title as a whole.
- var row=episodeProgress(entry),mark=row?(row.completed?'<div class="watched-overlay"><span>ПРОСМОТРЕНО</span></div>':(resumableRow(row)?'<div class="continue-overlay"><span>ПРОДОЛЖИТЬ</span></div>':'')):'';
+ var mark=episodeWatched(entry)?'<div class="watched-overlay"><span>ПРОСМОТРЕНО</span></div>':(resumableRow(episodeProgress(entry))?'<div class="continue-overlay"><span>ПРОДОЛЖИТЬ</span></div>':'');
  b.innerHTML='<div class="episode-thumb">'+mark+'<div class="episode-badge">Эпизод '+esc(number)+'</div><div class="episode-play">▶</div></div><div class="episode-name">'+esc(entry.title||('Серия '+number))+'</div>'+(code?'<div class="episode-code">'+esc(code)+'</div>':'');
  var thumb=b.querySelector('.episode-thumb');if(thumb&&entry.thumbnail)thumb.style.background=bgCss(entry.thumbnail,'poster');
  b.onclick=function(){play(item,entry);};
@@ -308,7 +308,7 @@ function wireEpisodeCarousel(strip){
 }
 // Walks episodes in playback order and returns the index of the first one
 // without a completed progress row, or -1 if every single one is watched.
-function firstUnwatchedIndex(list){for(var i=0;i<list.length;i++){var row=episodeProgress(list[i]);if(!row||!row.completed)return i;}return -1;}
+function firstUnwatchedIndex(list){for(var i=0;i<list.length;i++){if(!episodeWatched(list[i]))return i;}return -1;}
 // Same idea across season boundaries, for the season-picker layout.
 function firstUnwatchedInSeasons(seasons){
  for(var s=0;s<seasons.length;s++){
@@ -349,12 +349,12 @@ function renderDetailsEpisodes(item){
   var start=Number(state.detailsSeason);
   if(!isFinite(start)||!seasons[start])start=0;
   var startEpisode=0;
-  // Progress hasn't loaded yet on the very first render (openDetails nulls
-  // it out and fetches async) - jumping to "the first unwatched episode"
-  // before we actually know what's watched would just be season 0 anyway,
-  // so skip it and let the re-render this triggers once loadItemProgress
-  // resolves do the real jump.
-  if(state.detailsProgress){
+  // Neither watched signal has loaded yet on the very first render
+  // (openDetails nulls both out and fetches them async) - jumping to "the
+  // first unwatched episode" before we know anything would just be season 0
+  // anyway, so skip it and let whichever load resolves first re-render with
+  // the real answer.
+  if(state.detailsProgress||state.detailsWatching){
    var target=firstUnwatchedInSeasons(seasons);
    if(target){start=target.season;startEpisode=target.episode;}
    else{start=seasons.length-1;startEpisode=Math.max(0,((seasons[start].episodes)||[]).length-1);}
@@ -371,7 +371,7 @@ function renderDetailsEpisodes(item){
  var flatCarousel=wireEpisodeCarousel(flatStrip);
  root.appendChild(flatCarousel);
  flatCarousel.refresh();
- if(state.detailsProgress){
+ if(state.detailsProgress||state.detailsWatching){
   var flatUnwatched=firstUnwatchedIndex(episodes);
   flatCarousel.showIndex(flatUnwatched===-1?episodes.length-1:flatUnwatched);
  }
@@ -380,6 +380,17 @@ function renderDetailsEpisodes(item){
 // continues the episode that was actually left unfinished.
 function progressRows(){return (state.detailsProgress&&state.detailsProgress.items)||[];}
 function episodeProgress(entry){var id=String(entry&&(entry.id||entry.media_id)||''),rows=progressRows();for(var i=0;i<rows.length;i++)if(String(rows[i].episode_id||'')===id)return rows[i];return null;}
+// Two "watched" signals can exist for the same episode: our own local
+// resume-progress row (this client only, from /history) and KinoPub's own
+// per-video status from `v1/watching` (real, tracked across every device the
+// account has used). Either one marking it watched is enough - finishing an
+// episode on the TV app or the real site should still cross it off here.
+function episodeWatched(entry){
+ var row=episodeProgress(entry);
+ if(row&&row.completed)return true;
+ var kp=state.detailsWatching&&state.detailsWatching.episodes,id=String(entry&&entry.id||'');
+ return !!(kp&&id&&kp[id]&&kp[id].watched);
+}
 // A row is worth resuming only in the middle: not at the very start, and not
 // once it is finished.
 function resumableRow(row){if(!row)return null;var pos=Number(row.position)||0,dur=Number(row.duration)||0;if(row.completed)return null;if(pos<30)return null;if(dur>0&&pos>dur-60)return null;return row;}
@@ -391,7 +402,16 @@ function episodeForRow(item,row){if(!row)return null;var id=String(row.episode_i
 // no business appearing next to the Continue button for a movie, which has
 // nothing to disambiguate in the first place.
 function episodeLabel(item,entry){if(!entry)return '';if(detailsMediaList(item).length<=1)return '';var season=entry.season,number=entry.episode||entry.number;if(!hasMultipleSeasons(item))return entry.title||'';return 'S'+pad2(season||1)+'E'+pad2(number||1)+(entry.title?' · '+entry.title:'');}
-function loadItemProgress(item){state.detailsProgress=null;return KPApi.history(item.id).then(function(d){state.detailsProgress=d;if(state.current&&String(state.current.id)===String(item.id)){renderDetailsActions(item);renderDetailsEpisodes(item);}return d;}).catch(function(){return null;});}
+// Re-renders read state.current, not the `item` argument: by the time either
+// of these resolves, KPApi.item(id) may already have replaced it with the
+// enriched item (real .seasons/.media) via renderDetails. Using the stale
+// summary-card `item` here would wipe a correctly-rendered episode strip
+// back to empty the moment this (often slower) call finally comes back.
+function loadItemProgress(item){state.detailsProgress=null;return KPApi.history(item.id).then(function(d){state.detailsProgress=d;if(state.current&&String(state.current.id)===String(item.id)){renderDetailsActions(state.current);renderDetailsEpisodes(state.current);}return d;}).catch(function(){return null;});}
+// KinoPub's own watched status (`v1/watching`), separate from the local
+// resume table above - covers episodes finished on another device/the real
+// site, which this client's own SQLite has no way of knowing about.
+function loadItemWatching(item){state.detailsWatching=null;return KPApi.watching(item.id).then(function(d){state.detailsWatching=d;if(state.current&&String(state.current.id)===String(item.id))renderDetailsEpisodes(state.current);return d;}).catch(function(){return null;});}
 // Watch buttons. 'Continue' appears only when there is a mid-way position to
 // return to; otherwise a single plain 'Watch'.
 function renderDetailsActions(item){
@@ -453,7 +473,7 @@ function openDetails(item){
  $('detailsTitle').textContent=item.title||'Загрузка…';
  $('detailsOriginal').textContent='';
  $('detailsTabs').innerHTML='';$('detailsInfo').innerHTML='';$('detailsEpisodes').innerHTML='';
- $('detailsActions').innerHTML='';state.detailsProgress=null;loadItemProgress(item);
+ $('detailsActions').innerHTML='';state.detailsProgress=null;loadItemProgress(item);state.detailsWatching=null;loadItemWatching(item);
  $('detailsTabBody').textContent='Получаем сведения и список видео…';
  $('detailsBackdrop').style.background=bgCss(item.backdrop||item.poster,'backdrop',item.backdrop_fallback||item.poster);
  $('detailsPoster').style.background=bgCss(item.poster,'poster');
