@@ -51,13 +51,27 @@ function watchedStatus(item){var id=String(item&&item.id||'');if(item&&item.watc
 function card(item){var p=ratings(item),status=watchedStatus(item),b=document.createElement('button');b.className='media-card focusable';var mark=status===1?'<div class="watched-overlay"><span>ПРОСМОТРЕНО</span></div>':(status===0?'<div class="continue-overlay"><span>ПРОДОЛЖИТЬ</span></div>':'');b.innerHTML='<div class="poster-art">'+mark+'<div class="poster-badges"><span title="Субтитры"><svg><use xlink:href="#i-subtitles"></use></svg></span><span title="Dolby"><svg><use xlink:href="#i-dolby"></use></svg></span><span title="HD"><svg><use xlink:href="#i-hd"></use></svg></span></div><div class="poster-ratings"><span><svg><use xlink:href="#i-thumb"></use></svg>'+p[0]+'</span><span><svg><use xlink:href="#i-imdb"></use></svg>'+p[1]+'</span><span><svg><use xlink:href="#i-kp"></use></svg>'+p[2]+'</span></div></div><div class="item-title">'+esc(item.title||'')+'</div><div class="item-author">'+esc(item.original_title||'')+'</div>';var poster=b.querySelector('.poster-art');if(poster)poster.style.background=bgCss(item.poster,'poster');b.onclick=function(){state.current=item;openDetails(item);};b.onfocus=function(){state.current=item;};return b;}
 function renderTop(){var cfg=routes[state.route]||routes.popular,root=$('catalogTop');root.innerHTML='';if(cfg.mode==='tabs'){var row=document.createElement('div');row.className='tab-row';var tabs=[['popular','Популярные'],['new','Свежие'],['hot','Горячие']];for(var i=0;i<tabs.length;i++){var bt=document.createElement('button');bt.className='focusable catalog-tab'+(state.route===tabs[i][0]?' active':'');bt.textContent=tabs[i][1];bt.onclick=(function(r){return function(){route(r);};}(tabs[i][0]));row.appendChild(bt);}root.appendChild(row);return;}var head=document.createElement('div');head.className='catalog-title-row';var title='<h3>';if(cfg.show3d)title+='<button class="focusable title-link'+(state.route!=='3d'?' title-current':'')+'" data-route-inline="movie">Фильмы</button><span class="title-sep">&nbsp;</span><button class="focusable title-link'+(state.route==='3d'?' title-current':'')+'" data-route-inline="3d">3D</button>';else title+=esc(cfg.title);title+='</h3><button id="filterToggle" class="focusable filter-toggle">Фильтры ▾</button>';head.innerHTML=title;root.appendChild(head);var m=head.querySelector('[data-route-inline="movie"]');if(m)m.onclick=function(){route('movie');};var f=head.querySelector('[data-route-inline="3d"]');if(f)f.onclick=function(){route('3d');};var t=head.querySelector('#filterToggle');if(t)t.onclick=toggleFilters;}
 function toggleFilters(){var old=$('filterPanel');if(old){old.parentNode.removeChild(old);return;}var panel=document.createElement('div');panel.id='filterPanel';panel.className='filter-panel';var labels=['Жанр','Страна','Год','Качество','Субтитры','Сортировка'];for(var i=0;i<labels.length;i++)panel.innerHTML+='<label>'+labels[i]+'<select class="focusable"><option>Любые</option></select></label>';$('catalogTop').appendChild(panel);setTimeout(focusFirst,10);}
+// The grid is CSS auto-fill (`repeat(auto-fill,minmax(165px,1fr))`), so the
+// browser already resolves it to one fixed-width track per column before any
+// cards are even in it - reading the computed style back gives the exact
+// column count for the current viewport without duplicating that layout math
+// here. jsdom (the test harness) never runs layout, so its computed value is
+// just the literal `repeat(...)` text with no `px` tokens - that reads as 0
+// columns, which callers treat as "unknown, use the old flat default".
+function gridColumns(){var g=$('catalogGrid'),dv=document.defaultView;if(!g||!dv||!dv.getComputedStyle)return 0;var tmpl=(dv.getComputedStyle(g).gridTemplateColumns||'').trim();if(!tmpl)return 0;var parts=tmpl.split(/\s+/),cols=0;for(var i=0;i<parts.length;i++)if(/px$/.test(parts[i]))cols++;return cols;}
+// KinoPub always fills a page to `perpage` except the last, so whatever
+// doesn't divide evenly by the row width leaves a ragged last row on every
+// page in between, not just the final one. Picking the row count closest to
+// 50/cols keeps the total near 50 while landing on a whole number of rows -
+// 7/row -> 7 rows (49), 8/row -> 6 rows (48), 6/row -> 8 rows (48).
+function catalogPerPage(){var cols=gridColumns();if(!cols)return state.catalogPerPage||48;var rows=Math.max(1,Math.round(50/cols));var perpage=rows*cols;if(perpage!==state.catalogPerPage){state.catalogPerPage=perpage;state.catalogCache={};state.catalogPages={};state.catalogTotals={};}return perpage;}
 function catalogPageKey(cfg){return cfg.mode==='history'?('history:'+(state.historyType||'all')):(cfg.section+':'+cfg.feed);}
 function currentCatalogPage(cfg){var key=catalogPageKey(cfg);return state.catalogPages[key]||0;}
 function setCatalogPage(page){var cfg=routes[state.route]||routes.popular,key=catalogPageKey(cfg);state.catalogPages[key]=Math.max(0,page||0);renderCatalog();setTimeout(function(){try{$('catalogTop').scrollIntoView(true);}catch(e){}},20);}
 function pageButton(label,page,active,disabled,extraClass){var b=document.createElement('button');b.className='focusable page-button'+(active?' active':'')+(extraClass?' '+extraClass:'');b.textContent=label;b.disabled=!!disabled;if(!disabled)b.onclick=function(){setCatalogPage(page);};return b;}
 function renderPagination(meta,itemCount){
  var root=$('catalogPagination');root.innerHTML='';
- var current=Math.max(0,parseInt(meta&&meta.page,10)||0),totalPages=Math.max(0,parseInt(meta&&meta.total_pages,10)||0),knownTotal=totalPages>0,hasItems=itemCount>0,pageFull=itemCount>=48;
+ var current=Math.max(0,parseInt(meta&&meta.page,10)||0),totalPages=Math.max(0,parseInt(meta&&meta.total_pages,10)||0),knownTotal=totalPages>0,hasItems=itemCount>0,pageFull=itemCount>=(meta&&meta.perpage||48);
  if(!hasItems&&current===0){root.classList.add('hidden');return;}
  root.classList.remove('hidden');
  // KinoPub keeps ten numeric buttons around the current page. Near the end,
@@ -79,7 +93,7 @@ function renderPagination(meta,itemCount){
 function discoverTotalPages(cfg,meta,itemCount,forceRefresh){
  var key=catalogPageKey(cfg),known=state.catalogTotals[key];
  if(known>1&&!forceRefresh){meta.total_pages=Math.max(known,meta.total_pages||0);renderPagination(meta,itemCount);return;}
- KPApi.pageCount(cfg.section,cfg.feed,!!forceRefresh).then(function(info){
+ KPApi.pageCount(cfg.section,cfg.feed,meta.perpage,!!forceRefresh).then(function(info){
    var total=parseInt(info&&info.total_pages,10)||0;if(!total)return;
    // Treat probed totals as a lower bound. Shortcut feeds can expose more pages
    // than an earlier probe found, so never shrink a total already reached.
@@ -118,22 +132,23 @@ function renderCatalog(){
  var cfg=routes[state.route]||routes.popular;
  if(cfg.mode==='history'){renderHistory(cfg);return;}
  renderTop();
- var g=$('catalogGrid'),page=currentCatalogPage(cfg),cacheKey=catalogPageKey(cfg)+':'+page;
+ var g=$('catalogGrid'),page=currentCatalogPage(cfg);
  g.className='poster-grid';
+ var perpage=catalogPerPage(),cacheKey=catalogPageKey(cfg)+':'+page+':'+perpage;
  g.innerHTML='<p class="empty-state">Загрузка раздела…</p>';$('catalogPagination').classList.add('hidden');
  var cached=state.catalogCache[cacheKey];
  if(cached){renderCatalogItems(cached.items);renderPagination(cached.meta,cached.items.length);if(page===0||!cached.meta.total_pages||cached.meta.total_pages<=1)discoverTotalPages(cfg,cached.meta,cached.items.length);return;}
  var requestId=++state.catalogRequest;
- KPApi.catalog(cfg.section,cfg.feed,page,state.cacheVersion).then(function(data){
+ KPApi.catalog(cfg.section,cfg.feed,page,state.cacheVersion,perpage).then(function(data){
    if(requestId!==state.catalogRequest)return;
-   var items=(data&&data.items)||[],meta={page:data&&data.page||0,total_pages:data&&data.total_pages||0,total_items:data&&data.total_items||0,has_next:!!(data&&data.has_next)};
+   var items=(data&&data.items)||[],meta={page:data&&data.page||0,total_pages:data&&data.total_pages||0,total_items:data&&data.total_items||0,has_next:!!(data&&data.has_next),perpage:perpage};
    var totalKey=catalogPageKey(cfg),reached=(parseInt(meta.page,10)||0)+1;
    if(reached>1&&reached>(state.catalogTotals[totalKey]||0))state.catalogTotals[totalKey]=reached;
    meta.total_pages=Math.max(meta.total_pages||0,state.catalogTotals[totalKey]||0);
    state.catalogCache[cacheKey]={items:items,meta:meta};
    renderCatalogItems(items);renderPagination(meta,items.length);
    if(page===0||!meta.total_pages||meta.total_pages<=1)discoverTotalPages(cfg,meta,items.length,false);
-   else if(items.length>=48&&meta.total_pages&&reached>=meta.total_pages)discoverTotalPages(cfg,meta,items.length,true);
+   else if(items.length>=perpage&&meta.total_pages&&reached>=meta.total_pages)discoverTotalPages(cfg,meta,items.length,true);
  }).catch(function(err){
    if(requestId!==state.catalogRequest)return;
    g.innerHTML='<p class="empty-state">Не удалось загрузить раздел: '+esc(err&&err.message?err.message:String(err))+'</p>';$('catalogPagination').classList.add('hidden');
