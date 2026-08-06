@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.73', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.74', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -2426,10 +2426,20 @@ async def watching_statuses(kp_session: Optional[str] = Cookie(default=None)) ->
 
 
 @app.get('/history')
-def get_history() -> Dict[str, Any]:
+def get_history(media_id: str = '') -> Dict[str, Any]:
+    """Locally stored resume positions, newest first.
+
+    ``media_id`` narrows it to one title so the details screen can offer
+    "continue" without pulling the whole list.
+    """
     with db_connect() as conn:
-        rows=conn.execute('SELECT * FROM watch_progress ORDER BY updated_at DESC LIMIT 100').fetchall()
-    return {'items':[dict(x) for x in rows]}
+        if media_id:
+            rows = conn.execute(
+                'SELECT * FROM watch_progress WHERE media_id = ? ORDER BY updated_at DESC',
+                (media_id,)).fetchall()
+        else:
+            rows = conn.execute('SELECT * FROM watch_progress ORDER BY updated_at DESC LIMIT 100').fetchall()
+    return {'items': [dict(x) for x in rows]}
 
 @app.put('/history')
 def put_history(payload: ProgressPayload) -> Dict[str, str]:

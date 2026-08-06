@@ -125,7 +125,11 @@ body.auth-locked .sidebar,body.auth-locked .content-shell{visibility:hidden;poin
 .details-vote{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;padding:9px 6px;border-radius:6px;font-size:15px;font-weight:700}
 .details-vote-up{background:rgba(25,189,118,.16);color:#4fd99a}
 .details-vote-down{background:rgba(226,74,74,.14);color:#e8807c}
-.details-play{width:100%;padding:15px 18px;font-size:17px;font-weight:700}
+/* Actions sit under the headline now, not in the poster column. */
+.details-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+.details-play{padding:15px 26px;font-size:17px;font-weight:700}
+.details-play-secondary{padding:15px 22px;font-size:16px}
+.details-resume-note{color:#8f98aa;font-size:14px}
 .details-tabs{display:flex;gap:26px;border-bottom:1px solid #2b3345}
 .details-tab{border:0;background:transparent;color:#8f98aa;font-size:19px;padding:0 2px 12px;border-bottom:3px solid transparent;margin-bottom:-1px}
 .details-tab:hover,.details-tab:focus{color:#fff}
@@ -140,7 +144,7 @@ body.auth-locked .sidebar,body.auth-locked .content-shell{visibility:hidden;poin
 .details-info-value{color:#e6e9ef}
 .details-info-value .accent{color:#4fd99a}
 .details-info-value small{color:#79839a;margin-left:4px}
-.details-episodes{margin-top:26px}
+.details-episodes{margin-bottom:28px}
 .details-seasons{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:14px}
 .details-seasons-label{color:#8f98aa;font-size:15px;margin-right:4px}
 .season-pill{border:1px solid #3b4558;background:transparent;color:#c8cfdd;border-radius:999px;min-width:44px;padding:7px 14px;font-size:15px}
