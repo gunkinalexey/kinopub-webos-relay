@@ -4,7 +4,7 @@
   function request(path, options) {
     options = options || {}; options.credentials = 'include'; options.headers = options.headers || {}; if (!options.cache) options.cache='no-store';
     if (options.body && typeof options.body !== 'string') { options.headers['Content-Type']='application/json'; options.body=JSON.stringify(options.body); }
-    return fetch(BASE + path, options).then(function (r) { if (r.status===202) return r.json(); if (!r.ok) return r.text().then(function(t){throw new Error(t||r.statusText);}); return r.json(); });
+    return fetch(BASE + path, options).then(function (r) { if (r.status===202) return r.json(); if (!r.ok) return r.text().then(function(t){var err=new Error(t||r.statusText);err.status=r.status;throw err;}); return r.json(); });
   }
   global.KPApi = {
     status:function(){return request('/auth/status');}, profile:function(refresh){return request('/profile'+(refresh?'?refresh=true':''));}, health:function(){return request('/health');},
