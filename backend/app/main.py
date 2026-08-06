@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.78', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.79', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -1047,11 +1047,8 @@ async def _history_fetch(session: Dict[str, Any], api_page: int, perpage: int) -
 
 
 async def _history_scan(session: Dict[str, Any], sid: str, section: str) -> List[Dict[str, Any]]:
-    """Every history item of one type, walking upstream pages until exhausted.
-
-    An empty ``section`` collects every type instead of filtering - used by
-    /catalog/watching, which wants both movies and series."""
-    key = f'{hashlib.sha256(sid.encode("utf-8")).hexdigest()[:16]}:{section or "all"}'
+    """Every history item of one type, walking upstream pages until exhausted."""
+    key = f'{hashlib.sha256(sid.encode("utf-8")).hexdigest()[:16]}:{section}'
     cached = history_cache.get(key)
     if cached and cached['at'] + HISTORY_CACHE_TTL > time.time():
         return cached['items']
@@ -1063,13 +1060,13 @@ async def _history_scan(session: Dict[str, Any], sid: str, section: str) -> List
         scanned += len(entries)
         for entry in entries:
             item = _history_entry_item(entry)
-            if item and (not section or str(item.get('type') or '') == section):
+            if item and str(item.get('type') or '') == section:
                 collected.append(item)
         if len(entries) < HISTORY_SCAN_PERPAGE:
             break
     history_cache[key] = {'at': time.time(), 'items': collected}
     log_event('catalog', 'History scanned for a type filter', {
-        'type': section or 'all', 'matched': len(collected), 'scanned': scanned,
+        'type': section, 'matched': len(collected), 'scanned': scanned,
     })
     return collected
 
@@ -1124,27 +1121,26 @@ async def catalog_history(page: int = 0, perpage: int = 48, type: str = '', kp_s
 
 @app.get('/catalog/watching')
 async def catalog_watching(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
-    """"Я смотрю" ("I'm watching") - one card per title with any watch
-    history, most-recently-watched first.
-
-    KinoPub silently ignores a `watching`/`subscribed` filter on v1/items
-    (same story as v1/history's `type` param), so there's no server-side
-    equivalent to ask for directly. Built the same way /catalog/history's
-    per-type filter already is: scan history (every type, not just one) and
-    reduce client-side - history is already newest-first, so keeping the
-    first entry seen per title keeps the most recent watch.
+    """"Я смотрю" ("I'm watching") - series being followed that have new,
+    not-yet-watched episodes, straight from KinoPub's own `v1/watching/
+    serials` (a real, dedicated endpoint - not something built by scanning
+    /catalog/history, which would have meant "everything ever watched" and
+    missed the point of this section: which shows still have something new).
+    Each entry carries real total/watched/new episode counts.
     """
     session = await refresh_if_needed(kp_session or '', session_get(kp_session))
-    entries = await _history_scan(session, kp_session or '', '')
-    seen: set = set()
+    payload = await kino_get(session, 'v1/watching/serials', {})
+    raw_items = payload.get('items') if isinstance(payload, dict) else None
     items: List[Dict[str, Any]] = []
-    for entry in entries:
-        item_id = str(entry.get('id') or '')
-        if not item_id or item_id in seen:
+    for raw in (raw_items or []):
+        if not isinstance(raw, dict):
             continue
-        seen.add(item_id)
-        items.append(entry)
-    log_event('catalog', 'Watching list loaded', {'count': len(items), 'scanned': len(entries)})
+        item = normalize_catalog_item(raw)
+        item['watching_total'] = int(_plain_number(raw.get('total')) or 0)
+        item['watching_watched'] = int(_plain_number(raw.get('watched')) or 0)
+        item['watching_new'] = int(_plain_number(raw.get('new')) or 0)
+        items.append(item)
+    log_event('catalog', 'Watching list loaded', {'count': len(items)})
     return {'items': items, 'total_items': len(items)}
 
 

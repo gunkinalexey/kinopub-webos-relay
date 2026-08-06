@@ -53,6 +53,9 @@ function watchedStatus(item){var id=String(item&&item.id||'');if(item&&item.watc
 // (0/absent for a movie) plus a real frame grabbed from that episode's file.
 // Neither exists on plain catalogue items, so this is a no-op there.
 function historyEpisodeTag(item){var season=Number(item.history_season)||0,episode=Number(item.history_episode)||0;if(!season||!episode)return '';return 'S'+pad2(season)+'E'+pad2(episode)+(item.media_title?' · '+item.media_title:'');}
+// "Я смотрю" cards carry a real new-episode count from KinoPub's own
+// v1/watching/serials - only present there, so this is a no-op elsewhere.
+function newEpisodesTag(item){var n=Number(item.watching_new)||0;return n>0?plural(n,'новая серия','новые серии','новых серий'):'';}
 // The catalogue *list* payload (unlike a single item's own detail/media
 // fetch) never carries subtitle info - only `ac3` (Dolby) and `quality`
 // (resolution) are real per-item fields there. A static "Субтитры" icon that
@@ -66,7 +69,7 @@ function posterBadges(item){
  else if(q>=720)parts.push('<span title="HD"><svg><use xlink:href="#i-hd"></use></svg></span>');
  return parts.length?'<div class="poster-badges">'+parts.join('')+'</div>':'';
 }
-function card(item){var p=ratings(item),status=watchedStatus(item),b=document.createElement('button');b.className='media-card focusable';var mark=status===1?'<div class="watched-overlay"><span>ПРОСМОТРЕНО</span></div>':(status===0?'<div class="continue-overlay"><span>ПРОДОЛЖИТЬ</span></div>':'');var episodeTag=historyEpisodeTag(item),subtitle=episodeTag||item.original_title||'';var useFrame=episodeTag&&item.episode_thumbnail&&(!state.settings||state.settings.history_episode_frames!==false);b.innerHTML='<div class="poster-art">'+mark+posterBadges(item)+'<div class="poster-ratings"><span><svg><use xlink:href="#i-thumb"></use></svg>'+p[0]+'</span><span><svg><use xlink:href="#i-imdb"></use></svg>'+p[1]+'</span><span><svg><use xlink:href="#i-kp"></use></svg>'+p[2]+'</span></div></div><div class="item-title">'+esc(item.title||'')+'</div><div class="item-author">'+esc(subtitle)+'</div>';var poster=b.querySelector('.poster-art');if(poster)poster.style.background=bgCss(useFrame?item.episode_thumbnail:item.poster,'poster',useFrame?item.poster:'');b.onclick=function(){state.current=item;openDetails(item);};b.onfocus=function(){state.current=item;};return b;}
+function card(item){var p=ratings(item),status=watchedStatus(item),b=document.createElement('button');b.className='media-card focusable';var newTag=newEpisodesTag(item);var mark=newTag?'<div class="new-episodes-badge">'+esc(newTag)+'</div>':(status===1?'<div class="watched-overlay"><span>ПРОСМОТРЕНО</span></div>':(status===0?'<div class="continue-overlay"><span>ПРОДОЛЖИТЬ</span></div>':''));var episodeTag=historyEpisodeTag(item),subtitle=episodeTag||item.original_title||'';var useFrame=episodeTag&&item.episode_thumbnail&&(!state.settings||state.settings.history_episode_frames!==false);b.innerHTML='<div class="poster-art">'+mark+posterBadges(item)+'<div class="poster-ratings"><span><svg><use xlink:href="#i-thumb"></use></svg>'+p[0]+'</span><span><svg><use xlink:href="#i-imdb"></use></svg>'+p[1]+'</span><span><svg><use xlink:href="#i-kp"></use></svg>'+p[2]+'</span></div></div><div class="item-title">'+esc(item.title||'')+'</div><div class="item-author">'+esc(subtitle)+'</div>';var poster=b.querySelector('.poster-art');if(poster)poster.style.background=bgCss(useFrame?item.episode_thumbnail:item.poster,'poster',useFrame?item.poster:'');b.onclick=function(){state.current=item;openDetails(item);};b.onfocus=function(){state.current=item;};return b;}
 function renderTop(){var cfg=routes[state.route]||routes.popular,root=$('catalogTop');root.innerHTML='';if(cfg.mode==='tabs'){var row=document.createElement('div');row.className='tab-row';var tabs=[['popular','Популярные'],['new','Свежие'],['hot','Горячие']];for(var i=0;i<tabs.length;i++){var bt=document.createElement('button');bt.className='focusable catalog-tab'+(state.route===tabs[i][0]?' active':'');bt.textContent=tabs[i][1];bt.onclick=(function(r){return function(){route(r);};}(tabs[i][0]));row.appendChild(bt);}root.appendChild(row);return;}var head=document.createElement('div');head.className='catalog-title-row';var title='<h3>';if(cfg.show3d)title+='<button class="focusable title-link'+(state.route!=='3d'?' title-current':'')+'" data-route-inline="movie">Фильмы</button><span class="title-sep">&nbsp;</span><button class="focusable title-link'+(state.route==='3d'?' title-current':'')+'" data-route-inline="3d">3D</button>';else title+=esc(cfg.title);title+='</h3><button id="filterToggle" class="focusable filter-toggle">Фильтры ▾</button>';head.innerHTML=title;root.appendChild(head);var m=head.querySelector('[data-route-inline="movie"]');if(m)m.onclick=function(){route('movie');};var f=head.querySelector('[data-route-inline="3d"]');if(f)f.onclick=function(){route('3d');};var t=head.querySelector('#filterToggle');if(t)t.onclick=toggleFilters;}
 function toggleFilters(){var old=$('filterPanel');if(old){old.parentNode.removeChild(old);return;}var panel=document.createElement('div');panel.id='filterPanel';panel.className='filter-panel';var labels=['Жанр','Страна','Год','Качество','Субтитры','Сортировка'];for(var i=0;i<labels.length;i++)panel.innerHTML+='<label>'+labels[i]+'<select class="focusable"><option>Любые</option></select></label>';$('catalogTop').appendChild(panel);setTimeout(focusFirst,10);}
 // The grid is CSS auto-fill (`repeat(auto-fill,minmax(165px,1fr))`), so the
@@ -146,9 +149,9 @@ function renderHistory(cfg){
   $('catalogPagination').classList.add('hidden');
  });
 }
-// "Я смотрю" - one card per title with any watch history, most recent
-// first. Same underlying scan as /catalog/history's per-type filter, just
-// deduped to one row per title instead of one per episode watched.
+// "Я смотрю" - series being followed that have new, not-yet-watched
+// episodes (KinoPub's real v1/watching/serials, not a history scan - that
+// would have meant "everything ever watched" instead of "what's new").
 function updateWatchingCount(n){var chip=$('watchingCount');if(!chip)return;chip.textContent=n>0?String(n):'';chip.classList.toggle('hidden',!n);}
 function renderWatching(cfg){
  renderTop();
