@@ -154,3 +154,11 @@ body.auth-locked .sidebar,body.auth-locked .content-shell{visibility:hidden;poin
 .episode-name{margin-top:8px;font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .episode-code{margin-top:2px;color:#8f98aa;font-size:12px}
 @media(max-width:1000px){.details-grid{grid-template-columns:1fr}.details-poster{height:300px;max-width:220px}.details-headline h2{font-size:30px}.details-info{grid-template-columns:130px 1fr}}
+
+/* History: KinoPub groups viewing history under day headings. */
+.history-list{display:block}
+.history-day{margin:22px 0 12px;font-size:17px;font-weight:600;color:#c8cfdd}
+.history-list .history-day:first-child{margin-top:0}
+.history-tabs{margin-top:12px}
+/* The Фильмы / 3D pair in the catalogue heading: the active one is white. */
+.title-current{color:#fff}

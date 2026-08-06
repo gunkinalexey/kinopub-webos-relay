@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.66', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.71', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -156,6 +156,10 @@ class SettingsPayload(BaseModel):
     autoplay_next: bool = True
     reduce_motion: bool = False
     app_icon: str = 'kinopub'
+    # off | layer | video. 'video' fullscreens the media element itself, which
+    # is what usually promotes it to the hardware video plane (and with it HDR
+    # passthrough), at the cost of replacing the custom controls with native ones.
+    player_fullscreen: str = 'layer'
 
 
 class ProgressPayload(BaseModel):
@@ -485,6 +489,11 @@ def stream_from_file(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
                 'height': raw.get('h'),
                 'width': raw.get('w'),
                 'codec': raw.get('codec'),
+                'hevc': is_hevc(raw.get('codec')),
+                # KinoPub does not always flag HDR explicitly, so fall back to
+                # the quality label. Used as a hint only, never to gate playback.
+                'hdr': bool(raw.get('hdr')) or 'hdr' in str(raw.get('quality') or '').lower(),
+                'bitrate': raw.get('bitrate') or raw.get('br'),
                 'file': raw.get('file'),
             })
     return result
@@ -656,16 +665,34 @@ def collect_media(payload: Any) -> List[Dict[str, Any]]:
     return out
 
 
+HEVC_CODECS = {'hevc', 'h265', 'hvc1', 'hev1', 'x265'}
+
+
+def is_hevc(codec: Any) -> bool:
+    return str(codec or '').lower() in HEVC_CODECS
+
+
 def choose_best_stream(streams: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Rank candidates by picture quality, best first.
+
+    The previous ordering aimed at 1080p H.264 and treated everything else as a
+    defect: HEVC was penalised outright and ``abs(height - 1080)`` made 2160p
+    score exactly as badly as 0p, so 4K was never selected and 720p H.264 even
+    outranked 1080p HEVC. Since HEVC is what carries the 10-bit and HDR
+    variants, that also discarded the widest colour on offer.
+
+    Resolution leads, then HEVC over H.264 at equal size, then the plain HTTP
+    file so the client can hand it to a hardware decoder. The client still has
+    the final say: only it knows which codecs it can actually play.
+    """
     if not streams:
         return None
     def score(stream: Dict[str, Any]) -> tuple:
-        protocol_score = {'hls': 0, 'hls2': 1, 'http': 2, 'hls4': 3}.get(str(stream.get('source_type')), 4)
-        codec = str(stream.get('codec') or '').lower()
-        codec_score = 0 if codec in {'h264', 'avc', 'avc1', ''} else 2
         height = int(stream.get('height') or 0)
-        height_penalty = abs((height or 1080) - 1080)
-        return (codec_score, protocol_score, height_penalty)
+        codec = str(stream.get('codec') or '').lower()
+        codec_rank = 0 if is_hevc(codec) else (1 if codec in {'h264', 'avc', 'avc1', ''} else 2)
+        protocol_rank = {'http': 0, 'hls': 1, 'hls2': 2, 'hls4': 3}.get(str(stream.get('source_type')), 4)
+        return (-height, codec_rank, protocol_rank)
     return sorted(streams, key=score)[0]
 
 
@@ -686,16 +713,26 @@ async def kino_get(session: Dict[str, Any], path: str, params: Optional[Dict[str
         raise HTTPException(502, 'KinoPub API returned invalid JSON') from exc
 
 
-CATALOG_SECTION_TYPES = {
-    'movie': 'movie',
-    'serial': 'serial',
-    'anime': 'anime',
-    'concert': 'concert',
-    'documovie': 'documovie',
-    'docuserial': 'docuserial',
-    'tvshow': 'tvshow',
-    'sport': 'sport',
+# A sidebar section maps to either a KinoPub content type or a genre filter.
+# "Аниме" is genre 25, not a type: /v1/items?type=anime returns nothing, which
+# is why that section came up empty. The site's /anime page is the same genre
+# filter, so it spans both films and series. 3D is a real type of its own.
+CATALOG_SECTIONS: Dict[str, Dict[str, Any]] = {
+    'movie': {'type': 'movie'},
+    'serial': {'type': 'serial'},
+    '3d': {'type': '3d'},
+    'anime': {'genre': 25},
+    'concert': {'type': 'concert'},
+    'documovie': {'type': 'documovie'},
+    'docuserial': {'type': 'docuserial'},
+    'tvshow': {'type': 'tvshow'},
+    'sport': {'type': 'sport'},
 }
+
+
+def section_params(section: str) -> Dict[str, Any]:
+    """Query parameters that select one sidebar section upstream."""
+    return dict(CATALOG_SECTIONS.get(section) or {})
 CATALOG_FEEDS = {
     'popular': 'v1/items/popular',
     'fresh': 'v1/items/fresh',
@@ -712,9 +749,9 @@ async def catalog_list(section: str = 'movie', feed: str = 'fresh', page: int = 
     """
     section = section.strip().lower()
     feed = feed.strip().lower()
-    api_type = CATALOG_SECTION_TYPES.get(section)
+    selector = section_params(section)
     endpoint = CATALOG_FEEDS.get(feed)
-    if not api_type:
+    if not selector:
         raise HTTPException(400, f'Unknown catalogue section: {section}')
     if not endpoint:
         raise HTTPException(400, f'Unknown catalogue feed: {feed}')
@@ -725,12 +762,12 @@ async def catalog_list(section: str = 'movie', feed: str = 'fresh', page: int = 
     api_page = page + 1
     perpage = max(1, min(perpage, 100))
     session = await refresh_if_needed(kp_session or '', session_get(kp_session))
-    payload = await kino_get(session, endpoint, {'type': api_type, 'page': api_page, 'perpage': perpage})
+    payload = await kino_get(session, endpoint, {**selector, 'page': api_page, 'perpage': perpage})
     items = extract_catalog_items(payload)
     for item in items:
         item['section'] = section
     log_event('catalog', 'Catalogue section loaded', {
-        'section': section, 'api_type': api_type, 'feed': feed, 'page': page, 'api_page': api_page, 'count': len(items)
+        'section': section, 'selector': selector, 'feed': feed, 'page': page, 'api_page': api_page, 'count': len(items)
     })
     totals = _pagination_values(payload, perpage)
     total_pages, total_items = totals['total_pages'], totals['total_items']
@@ -739,7 +776,7 @@ async def catalog_list(section: str = 'movie', feed: str = 'fresh', page: int = 
     has_next = (page + 1 < total_pages) if total_pages > 1 else (len(items) >= perpage)
     return {
         'section': section,
-        'type': api_type,
+        'selector': selector,
         'feed': feed,
         'page': page,
         'perpage': perpage,
@@ -792,10 +829,8 @@ def _pagination_values(payload: Any, perpage: int) -> Dict[str, int]:
     return {'total_pages': max(0, total_pages), 'total_items': max(0, total_items)}
 
 
-async def _catalog_page_probe(session: Dict[str, Any], endpoint: str, api_type: str, page: int, perpage: int) -> Dict[str, Any]:
-    payload = await kino_get(session, endpoint, {
-        'type': api_type, 'page': page, 'perpage': perpage
-    })
+async def _catalog_page_probe(session: Dict[str, Any], endpoint: str, selector: Dict[str, Any], page: int, perpage: int) -> Dict[str, Any]:
+    payload = await kino_get(session, endpoint, {**selector, 'page': page, 'perpage': perpage})
     items = extract_catalog_items(payload)
     signature = tuple(str(item.get('id', '')) for item in items if item.get('id') is not None)
     page_meta = _pagination_values(payload, perpage)
@@ -814,7 +849,7 @@ async def _discover_page_count(session: Dict[str, Any], section: str, feed: str,
     returning an empty list. A page is therefore considered invalid when it is
     empty or repeats either page 1 or the immediately preceding page.
     """
-    api_type = CATALOG_SECTION_TYPES[section]
+    selector = section_params(section)
     endpoint = CATALOG_FEEDS[feed]
     key = _page_count_cache_key(section, feed, perpage)
     cached = page_count_cache.get(key)
@@ -828,7 +863,7 @@ async def _discover_page_count(session: Dict[str, Any], section: str, feed: str,
         nonlocal probes
         page = max(1, page)
         if page not in probe_cache:
-            probe_cache[page] = await _catalog_page_probe(session, endpoint, api_type, page, perpage)
+            probe_cache[page] = await _catalog_page_probe(session, endpoint, selector, page, perpage)
             probes += 1
         return probe_cache[page]
 
@@ -916,7 +951,7 @@ async def prewarm_page_counts(force: bool = False, sid: Optional[str] = None) ->
         session = await refresh_if_needed(session_sid, row)
         targets = [
             ('movie', 'popular'), ('movie', 'fresh'), ('movie', 'hot'),
-            ('movie', 'all'), ('serial', 'all'), ('anime', 'all'), ('concert', 'all'),
+            ('movie', 'all'), ('serial', 'all'), ('3d', 'all'), ('anime', 'all'), ('concert', 'all'),
             ('documovie', 'all'), ('docuserial', 'all'),
             ('tvshow', 'all'), ('sport', 'all'),
         ]
@@ -938,13 +973,119 @@ async def prewarm_page_counts(force: bool = False, sid: Optional[str] = None) ->
 async def catalog_page_count(section: str = 'movie', feed: str = 'fresh', perpage: int = 48, refresh: bool = False, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
     section = section.strip().lower()
     feed = feed.strip().lower()
-    if section not in CATALOG_SECTION_TYPES:
+    if section not in CATALOG_SECTIONS:
         raise HTTPException(400, f'Unknown catalogue section: {section}')
     if feed not in CATALOG_FEEDS:
         raise HTTPException(400, f'Unknown catalogue feed: {feed}')
     perpage = max(1, min(perpage, 100))
     session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     return await _discover_page_count(session, section, feed, perpage, refresh=refresh)
+
+
+HISTORY_TYPES = ['movie', 'serial', '3d', 'concert', 'documovie', 'docuserial', 'tvshow']
+# v1/history ignores a `type` parameter: it returns the same page whatever is
+# passed. Filtering therefore has to happen here, which means one upstream page
+# no longer fills one UI page, so several are scanned and sliced locally.
+HISTORY_SCAN_PAGES = 20
+HISTORY_SCAN_PERPAGE = 50
+HISTORY_CACHE_TTL = 180
+history_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def _history_entry_item(entry: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(entry, dict):
+        return None
+    raw = entry.get('item') if isinstance(entry.get('item'), dict) else {}
+    if not raw:
+        return None
+    item = normalize_catalog_item(raw)
+    if not item['id']:
+        return None
+    media = entry.get('media') if isinstance(entry.get('media'), dict) else {}
+    watched = _plain_number(_pick_first(entry, ['created', 'updated', 'time', 'date', 'last_seen', 'watched_at']))
+    item['watched_at'] = int(watched) if watched else 0
+    item['media_title'] = str(media.get('title') or '') if media else ''
+    item['director'] = ', '.join(_name_list(raw.get('director') or raw.get('directors')))
+    return item
+
+
+async def _history_fetch(session: Dict[str, Any], api_page: int, perpage: int) -> Dict[str, Any]:
+    payload = await kino_get(session, 'v1/history', {'page': api_page, 'perpage': perpage})
+    entries = payload.get('history') if isinstance(payload, dict) else None
+    return {'entries': entries if isinstance(entries, list) else [], 'payload': payload}
+
+
+async def _history_scan(session: Dict[str, Any], sid: str, section: str) -> List[Dict[str, Any]]:
+    """Every history item of one type, walking upstream pages until exhausted."""
+    key = f'{hashlib.sha256(sid.encode("utf-8")).hexdigest()[:16]}:{section}'
+    cached = history_cache.get(key)
+    if cached and cached['at'] + HISTORY_CACHE_TTL > time.time():
+        return cached['items']
+    collected: List[Dict[str, Any]] = []
+    scanned = 0
+    for api_page in range(1, HISTORY_SCAN_PAGES + 1):
+        result = await _history_fetch(session, api_page, HISTORY_SCAN_PERPAGE)
+        entries = result['entries']
+        scanned += len(entries)
+        for entry in entries:
+            item = _history_entry_item(entry)
+            if item and str(item.get('type') or '') == section:
+                collected.append(item)
+        if len(entries) < HISTORY_SCAN_PERPAGE:
+            break
+    history_cache[key] = {'at': time.time(), 'items': collected}
+    log_event('catalog', 'History scanned for a type filter', {
+        'type': section, 'matched': len(collected), 'scanned': scanned,
+    })
+    return collected
+
+
+
+@app.get('/catalog/history')
+async def catalog_history(page: int = 0, perpage: int = 48, type: str = '', kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """Viewing history from KinoPub, newest first, grouped by day.
+
+    Distinct from ``/history``, which is this bridge's own resume positions.
+    """
+    section = (type or '').strip().lower()
+    if section and section not in HISTORY_TYPES:
+        raise HTTPException(400, f'Unknown history type: {section}')
+    page = max(0, min(page, 9999))
+    perpage = max(1, min(perpage, 100))
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+
+    if section:
+        matched = await _history_scan(session, kp_session or '', section)
+        start = page * perpage
+        items = matched[start:start + perpage]
+        total_items = len(matched)
+        total_pages = max(1, (total_items + perpage - 1) // perpage)
+        log_event('catalog', 'History loaded', {
+            'page': page, 'type': section, 'count': len(items), 'total': total_items,
+        })
+        return {
+            'page': page, 'perpage': perpage, 'type': section,
+            'total_pages': total_pages, 'total_items': total_items,
+            'has_next': start + perpage < total_items,
+            'items': items,
+        }
+
+    result = await _history_fetch(session, page + 1, perpage)
+    entries = result['entries']
+    items = [item for item in (_history_entry_item(entry) for entry in entries) if item]
+    totals = _pagination_values(result['payload'], perpage)
+    log_event('catalog', 'History loaded', {
+        'page': page, 'type': 'all', 'count': len(items), 'raw': len(entries),
+    })
+    return {
+        'page': page,
+        'perpage': perpage,
+        'type': section,
+        'total_pages': totals['total_pages'],
+        'total_items': totals['total_items'],
+        'has_next': (page + 1 < totals['total_pages']) if totals['total_pages'] > 1 else (len(entries) >= perpage),
+        'items': items,
+    }
 
 
 @app.get('/catalog/autocomplete')
@@ -1298,8 +1439,13 @@ async def profile(refresh: bool = False, kp_session: Optional[str] = Cookie(defa
 @app.get('/auth/status')
 def auth_status(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, bool]:
     try:
-        session_get(kp_session)
-        return {'authenticated': True, 'credentials_configured': bool(CLIENT_ID and CLIENT_SECRET)}
+        row = session_get(kp_session)
+        return {
+            'authenticated': True,
+            'credentials_configured': bool(CLIENT_ID and CLIENT_SECRET),
+            'has_refresh_token': bool(row.get('refresh_token')),
+            'expires_in': max(0, int(float(row.get('expires_at') or 0) - time.time())),
+        }
     except HTTPException:
         return {'authenticated': False, 'credentials_configured': bool(CLIENT_ID and CLIENT_SECRET)}
 
@@ -1334,13 +1480,26 @@ async def auth_device_poll(payload: DevicePoll, response: Response) -> Response:
     sid = secrets.token_urlsafe(32)
     session_save(sid, {'access_token': data['access_token'], 'refresh_token': data.get('refresh_token'), 'expires_at': time.time() + int(data.get('expires_in', 3600)) - 60})
     pending_devices.pop(payload.code, None)
-    response.set_cookie('kp_session', sid, httponly=True, secure=COOKIE_SECURE, samesite='lax', max_age=60 * 60 * 24 * 30, path='/')
-    log_event('auth', 'Device authorized')
+    if not data.get('refresh_token'):
+        log_event('auth', 'Device authorized WITHOUT a refresh token: the session will end when the access token expires', {
+            'keys': sorted(str(k) for k in data.keys()),
+        })
+    else:
+        log_event('auth', 'Device authorized')
     previous_task = getattr(app.state, 'page_count_task', None)
     if previous_task and not previous_task.done():
         previous_task.cancel()
     app.state.page_count_task = asyncio.create_task(prewarm_page_counts(force=True, sid=sid))
-    return JSONResponse({'status': 'authorized'}, headers=dict(response.headers))
+    # Set the cookie on the response that is actually returned. Copying headers
+    # off the injected Response also copied its `content-length: 0`, and
+    # Starlette leaves a caller-supplied length alone — so the reply advertised
+    # zero bytes while carrying a body. The client read nothing, JSON parsing
+    # failed, and the "authorized" branch never ran even though the cookie had
+    # been set: the pairing screen stayed up and every retry created another
+    # session server-side.
+    result = JSONResponse({'status': 'authorized'})
+    result.set_cookie('kp_session', sid, httponly=True, secure=COOKIE_SECURE, samesite='lax', max_age=60 * 60 * 24 * 30, path='/')
+    return result
 
 
 @app.post('/auth/logout')

@@ -61,7 +61,7 @@
     <nav class="sidebar-nav">
       <button class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-bell"></use></svg></span><span>Я смотрю</span><span class="side-count">1</span></button>
       <button class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-bookmark"></use></svg></span><span>Закладки</span></button>
-      <button class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-history"></use></svg></span><span>История</span></button>
+      <button class="focusable side-link" data-route="history"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-history"></use></svg></span><span>История</span></button>
       <button class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-new"></use></svg></span><span>Новые эпизоды</span></button>
       <button class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-list"></use></svg></span><span>Подборки</span></button>
       <button class="focusable side-link"><span class="side-ico"><svg class="nav-icon"><use xlink:href="#i-award"></use></svg></span><span>Награды</span></button>
@@ -108,10 +108,11 @@
     <main id="settingsScreen" class="screen hidden page-screen">
       <div class="catalog-title-row"><h3>Настройки</h3></div>
       <div class="settings-grid">
-        <label>Качество<select id="setQuality" class="focusable"><option value="auto">Авто</option><option value="1080">1080p</option><option value="720">720p</option></select></label>
+        <label>Качество<select id="setQuality" class="focusable"><option value="auto">Максимум, что тянет устройство</option><option value="2160">До 2160p (4K)</option><option value="1080">До 1080p</option><option value="720">До 720p</option></select></label>
         <label>Режим потока<select id="setMode" class="focusable"><option value="auto">Авто</option><option value="direct">Direct</option><option value="relay">Relay</option><option value="hls">HLS relay</option></select></label>
         <label>Язык аудио<select id="setAudio" class="focusable"><option value="ru">Русский</option><option value="original">Оригинал</option></select></label>
         <label>Субтитры<select id="setSubs" class="focusable"><option value="off">Выключены</option><option value="ru">Русские</option><option value="en">English</option></select><span class="subtitle-hint">Дорожка выбирается автоматически при запуске, если у видео есть субтитры на этом языке.</span></label>
+        <label>Полный экран в плеере<select id="setFullscreen" class="focusable"><option value="layer">Оболочка плеера (свои кнопки)</option><option value="video">Само видео (максимум для HDR)</option><option value="off">Выключен</option></select><span class="subtitle-hint">Пикселей не добавляет. «Само видео» чаще отдаёт картинку аппаратной видеоплоскости телевизора, но управление станет системным.</span></label>
         <label>Размер субтитров<select id="setSubSize" class="focusable"><option value="75">Мелкие</option><option value="100">Обычные</option><option value="125">Крупные</option><option value="150">Очень крупные</option></select></label>
         <label class="toggle-line"><input id="setAutoplay" type="checkbox" class="focusable"> Автопереход к следующей серии</label>
         <label class="toggle-line"><input id="setMotion" type="checkbox" class="focusable"> Уменьшить анимации</label>
