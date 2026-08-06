@@ -154,22 +154,22 @@ body.auth-locked .sidebar,body.auth-locked .content-shell{visibility:hidden;poin
 .season-pill{border:1px solid #3b4558;background:transparent;color:#c8cfdd;border-radius:999px;min-width:44px;padding:7px 14px;font-size:15px}
 .season-pill:hover,.season-pill:focus{border-color:var(--green);color:#fff}
 .season-pill.active{background:var(--green);border-color:var(--green);color:#fff;font-weight:700}
-.episode-strip{display:flex;gap:14px;overflow-x:auto;padding-bottom:8px;scroll-behavior:smooth;scrollbar-width:none}
-.episode-strip::-webkit-scrollbar{display:none}
-/* Arrow-paged carousel instead of the strip's own (now hidden) scrollbar -
-   a native horizontal scrollbar next to an otherwise custom UI read as a
-   stray OS widget, and remote-only viewers have no way to drag one anyway. */
-.episode-carousel{position:relative}
-.episode-carousel::before,.episode-carousel::after{content:"";position:absolute;top:0;bottom:33px;width:48px;pointer-events:none;z-index:3;opacity:1;transition:opacity .14s ease}
-.episode-carousel::before{left:0;background:linear-gradient(90deg,#151a24,transparent)}
-.episode-carousel::after{right:0;background:linear-gradient(270deg,#151a24,transparent)}
-.episode-carousel:has(.episode-nav.prev.hidden)::before{opacity:0}
-.episode-carousel:has(.episode-nav.next.hidden)::after{opacity:0}
-.episode-nav{position:absolute;top:0;bottom:33px;width:38px;border:0;padding:0;display:flex;align-items:center;justify-content:center;background:rgba(12,15,22,.74);color:#fff;border-radius:6px;z-index:4;transition:background-color .14s ease,transform .14s ease}
-.episode-nav.prev{left:2px}
-.episode-nav.next{right:2px}
+.episode-strip{display:flex;gap:14px;padding-bottom:8px;transition:transform .32s ease}
+/* A true paged carousel, not a scroll-with-overlay-arrows: the strip only
+   ever sits at an exact multiple of one page's width, so a page never ends
+   mid-card, and the arrows are flex siblings of the viewport (not absolutely
+   positioned over it) so they never sit on top of - and steal clicks from -
+   the edge card. Dots below jump straight to a page. */
+.episode-carousel-outer{margin-bottom:8px}
+.episode-carousel{display:flex;align-items:stretch;gap:8px}
+.episode-viewport{flex:1;min-width:0;overflow:hidden}
+.episode-nav{flex:0 0 auto;width:38px;border:0;padding:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.06);color:#fff;border-radius:6px;transition:background-color .14s ease,transform .14s ease}
 .episode-nav svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
 .episode-nav:hover,.episode-nav:focus{background:var(--green);transform:scale(1.06)}
+.episode-dots{display:flex;justify-content:center;align-items:center;gap:10px;margin-top:8px}
+.episode-dot{width:18px;height:18px;padding:0;border:0;border-radius:9px;background:#3b4558;transition:background-color .14s ease,width .14s ease}
+.episode-dot:hover,.episode-dot:focus{background:#5b6580}
+.episode-dot.active{background:var(--green);width:44px}
 .episode-card{flex:0 0 232px;border:0;padding:0;background:transparent;color:#fff;text-align:left;transform-origin:center}
 .episode-card:hover,.episode-card:focus{transform:scale(1.045);z-index:5}
 .episode-thumb{position:relative;height:131px;border-radius:6px;background:#2b3548;background-size:cover!important;background-position:center!important;overflow:hidden}

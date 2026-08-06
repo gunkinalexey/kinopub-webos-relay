@@ -230,35 +230,92 @@ function episodeCard(item,entry,index){
  var b=document.createElement('button');b.className='focusable episode-card';
  var number=entry.episode||entry.number||index+1,season=entry.season||1;
  var code=hasMultipleSeasons(item)?('S'+pad2(season)+'E'+pad2(number)):'';
- b.innerHTML='<div class="episode-thumb"><div class="episode-badge">Эпизод '+esc(number)+'</div><div class="episode-play">▶</div></div><div class="episode-name">'+esc(entry.title||('Серия '+number))+'</div>'+(code?'<div class="episode-code">'+esc(code)+'</div>':'');
+ // Same per-episode resume/watched data the Continue button already reads,
+ // now marked on the episode's own card - the grid does this for whole
+ // titles, and a multi-episode strip needs the same "seen this one already"
+ // signal per card, not just for the title as a whole.
+ var row=episodeProgress(entry),mark=row?(row.completed?'<div class="watched-overlay"><span>ПРОСМОТРЕНО</span></div>':(resumableRow(row)?'<div class="continue-overlay"><span>ПРОДОЛЖИТЬ</span></div>':'')):'';
+ b.innerHTML='<div class="episode-thumb">'+mark+'<div class="episode-badge">Эпизод '+esc(number)+'</div><div class="episode-play">▶</div></div><div class="episode-name">'+esc(entry.title||('Серия '+number))+'</div>'+(code?'<div class="episode-code">'+esc(code)+'</div>':'');
  var thumb=b.querySelector('.episode-thumb');if(thumb&&entry.thumbnail)thumb.style.background=bgCss(entry.thumbnail,'poster');
  b.onclick=function(){play(item,entry);};
  return b;
 }
 function pad2(v){var n=Number(v);return (isFinite(n)&&n<10&&n>=0?'0':'')+(isFinite(n)?n:v);}
 function chevronSvg(dir){return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="'+(dir==='prev'?'M15 5l-7 7 7 7':'M9 5l7 7-7 7')+'"/></svg>';}
-// A long season turns the strip wider than the screen; a native horizontal
-// scrollbar next to an otherwise custom UI reads as a stray OS widget, and a
-// remote has no way to drag one anyway. Wrap the strip in two arrow buttons
-// that page it by roughly one screenful instead, hiding each arrow once
-// there's nothing further that way rather than just disabling it in place.
+// A long season turns the strip wider than the screen. Rather than a native
+// scroll with arrows floating on top of it (which fought remote/mouse clicks
+// for the edge card, and could leave a card half-cut at the boundary), this
+// is a true paged carousel: the strip only ever sits at an exact multiple of
+// one page's width, so a page break never lands mid-card, and the arrows are
+// flex siblings of the (clipped) viewport rather than absolutely positioned
+// over it, so they never sit on - or steal clicks from - an episode card.
+// Dots below jump straight to a page; a card focused by remote/keyboard on a
+// hidden page pulls its own page into view, since spatial nav has no idea
+// pages exist.
+var EPISODE_CARD_SLOT=232+14;
 function wireEpisodeCarousel(strip){
- var wrap=document.createElement('div');wrap.className='episode-carousel';
+ var viewport=document.createElement('div');viewport.className='episode-viewport';
+ viewport.appendChild(strip);
  var prev=document.createElement('button');prev.className='focusable episode-nav prev';prev.setAttribute('aria-label','Предыдущие серии');prev.innerHTML=chevronSvg('prev');
  var next=document.createElement('button');next.className='focusable episode-nav next';next.setAttribute('aria-label','Следующие серии');next.innerHTML=chevronSvg('next');
- wrap.appendChild(strip);wrap.appendChild(prev);wrap.appendChild(next);
- function pageWidth(){return Math.max(232,strip.clientWidth-232);}
- prev.onclick=function(){strip.scrollBy({left:-pageWidth(),behavior:'smooth'});};
- next.onclick=function(){strip.scrollBy({left:pageWidth(),behavior:'smooth'});};
- function refresh(){
-  var overflowing=strip.scrollWidth>strip.clientWidth+2;
-  prev.classList.toggle('hidden',!overflowing||strip.scrollLeft<=2);
-  next.classList.toggle('hidden',!overflowing||strip.scrollLeft>=strip.scrollWidth-strip.clientWidth-2);
+ var row=document.createElement('div');row.className='episode-carousel';
+ row.appendChild(prev);row.appendChild(viewport);row.appendChild(next);
+ var dots=document.createElement('div');dots.className='episode-dots';
+ var outer=document.createElement('div');outer.className='episode-carousel-outer';
+ outer.appendChild(row);outer.appendChild(dots);
+ var page=0,perPage=1,pageCount=1;
+ function measure(){
+  // maxWidth caps the viewport to whole cards only (see below) - clear it
+  // first so this always measures the row's true available width, not last
+  // render's already-capped one.
+  viewport.style.maxWidth='none';
+  perPage=Math.max(1,Math.floor((viewport.clientWidth+14)/EPISODE_CARD_SLOT));
+  pageCount=Math.max(1,Math.ceil(strip.children.length/perPage));
+  if(page>pageCount-1)page=pageCount-1;
+  // flex:1 would otherwise stretch the viewport past however many whole
+  // cards fit, letting the *next* card's edge peek through the clip.
+  viewport.style.maxWidth=(perPage*EPISODE_CARD_SLOT-14)+'px';
  }
- strip.addEventListener('scroll',refresh);
- wrap.refresh=refresh;
- setTimeout(refresh,0);
- return wrap;
+ function renderDots(){
+  dots.innerHTML='';
+  if(pageCount<=1)return;
+  for(var i=0;i<pageCount;i++){
+   var d=document.createElement('button');d.className='focusable episode-dot';d.setAttribute('aria-label','Серии, часть '+(i+1));
+   d.onclick=(function(index){return function(){goTo(index);};}(i));
+   dots.appendChild(d);
+  }
+ }
+ function apply(){
+  strip.style.transform='translateX(-'+(page*perPage*EPISODE_CARD_SLOT)+'px)';
+  prev.classList.toggle('hidden',page<=0);
+  next.classList.toggle('hidden',page>=pageCount-1);
+  var dotEls=dots.querySelectorAll('.episode-dot');
+  for(var i=0;i<dotEls.length;i++)dotEls[i].classList.toggle('active',i===page);
+ }
+ function goTo(index){page=Math.max(0,Math.min(pageCount-1,index));apply();}
+ prev.onclick=function(){goTo(page-1);};
+ next.onclick=function(){goTo(page+1);};
+ strip.addEventListener('focusin',function(e){
+  var card=e.target&&e.target.closest?e.target.closest('.episode-card'):null;
+  if(!card)return;
+  var index=Array.prototype.indexOf.call(strip.children,card);
+  if(index>=0)goTo(Math.floor(index/perPage));
+ });
+ outer.refresh=function(resetToStart){if(resetToStart)page=0;measure();renderDots();apply();};
+ outer.showIndex=function(index){goTo(Math.floor(Math.max(0,index)/perPage));};
+ setTimeout(function(){outer.refresh();},0);
+ return outer;
+}
+// Walks episodes in playback order and returns the index of the first one
+// without a completed progress row, or -1 if every single one is watched.
+function firstUnwatchedIndex(list){for(var i=0;i<list.length;i++){var row=episodeProgress(list[i]);if(!row||!row.completed)return i;}return -1;}
+// Same idea across season boundaries, for the season-picker layout.
+function firstUnwatchedInSeasons(seasons){
+ for(var s=0;s<seasons.length;s++){
+  var index=firstUnwatchedIndex(seasons[s].episodes||[]);
+  if(index>=0)return {season:s,episode:index};
+ }
+ return null;
 }
 // Three shapes, matched to what KinoPub actually sent:
 //  - 2+ real seasons  -> season pills, each with its own episode strip;
@@ -280,7 +337,7 @@ function renderDetailsEpisodes(item){
    strip.innerHTML='';
    var episodes=(seasons[index]&&seasons[index].episodes)||[];
    for(var e=0;e<episodes.length;e++)strip.appendChild(episodeCard(item,episodes[e],e));
-   strip.scrollLeft=0;carousel.refresh();
+   carousel.refresh(true);
   }
   for(var s=0;s<seasons.length;s++){
    var pill=document.createElement('button');pill.className='focusable season-pill';pill.setAttribute('data-season',String(s));
@@ -290,14 +347,34 @@ function renderDetailsEpisodes(item){
   }
   root.appendChild(bar);root.appendChild(carousel);
   var start=Number(state.detailsSeason);
-  showSeason(isFinite(start)&&seasons[start]?start:0);
+  if(!isFinite(start)||!seasons[start])start=0;
+  var startEpisode=0;
+  // Progress hasn't loaded yet on the very first render (openDetails nulls
+  // it out and fetches async) - jumping to "the first unwatched episode"
+  // before we actually know what's watched would just be season 0 anyway,
+  // so skip it and let the re-render this triggers once loadItemProgress
+  // resolves do the real jump.
+  if(state.detailsProgress){
+   var target=firstUnwatchedInSeasons(seasons);
+   if(target){start=target.season;startEpisode=target.episode;}
+   else{start=seasons.length-1;startEpisode=Math.max(0,((seasons[start].episodes)||[]).length-1);}
+   state.detailsSeason=start;
+  }
+  showSeason(start);
+  carousel.showIndex(startEpisode);
   return;
  }
  var episodes=seasons.length===1?(seasons[0].episodes||[]):(item.media||[]);
  if(episodes.length<=1)return;
  var flatStrip=document.createElement('div');flatStrip.className='episode-strip';
  for(var m=0;m<episodes.length;m++)flatStrip.appendChild(episodeCard(item,episodes[m],m));
- root.appendChild(wireEpisodeCarousel(flatStrip));
+ var flatCarousel=wireEpisodeCarousel(flatStrip);
+ root.appendChild(flatCarousel);
+ flatCarousel.refresh();
+ if(state.detailsProgress){
+  var flatUnwatched=firstUnwatchedIndex(episodes);
+  flatCarousel.showIndex(flatUnwatched===-1?episodes.length-1:flatUnwatched);
+ }
 }
 // Saved resume points for the open title. Keyed by episode id, so a series
 // continues the episode that was actually left unfinished.
@@ -308,8 +385,13 @@ function episodeProgress(entry){var id=String(entry&&(entry.id||entry.media_id)|
 function resumableRow(row){if(!row)return null;var pos=Number(row.position)||0,dur=Number(row.duration)||0;if(row.completed)return null;if(pos<30)return null;if(dur>0&&pos>dur-60)return null;return row;}
 function latestResumable(){var rows=progressRows();for(var i=0;i<rows.length;i++){var r=resumableRow(rows[i]);if(r)return r;}return null;}
 function episodeForRow(item,row){if(!row)return null;var id=String(row.episode_id||'');if(!id)return null;var media=detailsMediaList(item);for(var i=0;i<media.length;i++)if(String(media[i].id)===id)return media[i];return null;}
-function episodeLabel(item,entry){if(!entry)return '';var season=entry.season,number=entry.episode||entry.number;if(!hasMultipleSeasons(item))return entry.title||'';return 'S'+pad2(season||1)+'E'+pad2(number||1)+(entry.title?' · '+entry.title:'');}
-function loadItemProgress(item){state.detailsProgress=null;return KPApi.history(item.id).then(function(d){state.detailsProgress=d;if(state.current&&String(state.current.id)===String(item.id))renderDetailsActions(item);return d;}).catch(function(){return null;});}
+// A single-file movie's one "episode" still carries a title - backend fills
+// it with a synthetic "Серия 1" placeholder when KinoPub gives it no real
+// name, since that's a sane label for an actual multi-episode strip. It has
+// no business appearing next to the Continue button for a movie, which has
+// nothing to disambiguate in the first place.
+function episodeLabel(item,entry){if(!entry)return '';if(detailsMediaList(item).length<=1)return '';var season=entry.season,number=entry.episode||entry.number;if(!hasMultipleSeasons(item))return entry.title||'';return 'S'+pad2(season||1)+'E'+pad2(number||1)+(entry.title?' · '+entry.title:'');}
+function loadItemProgress(item){state.detailsProgress=null;return KPApi.history(item.id).then(function(d){state.detailsProgress=d;if(state.current&&String(state.current.id)===String(item.id)){renderDetailsActions(item);renderDetailsEpisodes(item);}return d;}).catch(function(){return null;});}
 // Watch buttons. 'Continue' appears only when there is a mid-way position to
 // return to; otherwise a single plain 'Watch'.
 function renderDetailsActions(item){
@@ -642,5 +724,11 @@ $('timeline').onclick=function(e){e.stopPropagation();seekFromTimelineEvent(e);}
 $('timeline').onkeydown=function(e){if(e.keyCode===37||e.keyCode===39){e.preventDefault();e.stopPropagation();var step=Math.max(5,(logicalDuration()||0)*0.01);seekLogical(logicalCurrentTime()+(e.keyCode===37?-step:step));}};
 $('togglePlay').onclick=function(e){e.stopPropagation();toggleVideoPlayback(false);showPlayerControls();};$('rewind').onclick=function(){seekLogical(logicalCurrentTime()-10);showPlayerControls();};$('forward').onclick=function(){seekLogical(logicalCurrentTime()+10);showPlayerControls();};$('playerStreamMode').onchange=function(e){e.stopPropagation();switchStreamMode(this.value);showPlayerControls();};$('playerQuality').onchange=function(e){e.stopPropagation();switchQuality(this.value);showPlayerControls();};$('playerSubtitles').onchange=function(e){e.stopPropagation();applySubtitleChoice(this.value);showPlayerControls();};$('playerSubtitleSize').onchange=function(e){e.stopPropagation();var size=applySubtitleSize(this.value);showPlayerControls();var next={};for(var k in state.settings)if(state.settings.hasOwnProperty(k))next[k]=state.settings[k];next.subtitle_size=size;KPApi.saveSettings(next).catch(function(){});};$('playerAudio').onchange=function(e){e.stopPropagation();applyAudioChoice(this.value);showPlayerControls();};$('closePlayer').onclick=closePlayer;$('playerCloseX').onclick=function(e){e.stopPropagation();closePlayer();};$('playerLayer').onmousemove=showPlayerControls;$('playerLayer').onmouseenter=showPlayerControls;function refreshNativeTracks(){populateAudioMenu();populateSubtitleMenu();reapplyAudioSelection();applySubtitleChoice(state.playerSubtitleChoice);}video.addEventListener('loadedmetadata',refreshNativeTracks);video.addEventListener('loadeddata',refreshNativeTracks);video.addEventListener('canplay',refreshNativeTracks);if(video.audioTracks){video.audioTracks.onaddtrack=refreshNativeTracks;video.audioTracks.onchange=function(){populateAudioMenu();};}if(video.textTracks){video.textTracks.onaddtrack=refreshNativeTracks;video.textTracks.onchange=function(){populateSubtitleMenu();};}video.addEventListener('play',showPlayerControls);video.addEventListener('pause',keepPlayerControlsVisible);video.addEventListener('ended',keepPlayerControlsVisible);
 document.addEventListener('fullscreenchange',function(){keepPlayerControlsVisible();});document.addEventListener('webkitfullscreenchange',function(){keepPlayerControlsVisible();});
+// The sidebar has its own overflow:auto (its nav list can outgrow the
+// window on a short screen), so a wheel scroll started over it scrolled the
+// sidebar instead of the content the user is actually looking at. Redirect
+// it to whichever screen is currently visible instead.
+var sidebarEl=document.querySelector('.sidebar');
+if(sidebarEl)sidebarEl.addEventListener('wheel',function(e){var target=$(visibleScreen());if(!target)return;e.preventDefault();target.scrollTop+=e.deltaY;},{passive:false});
 document.body.classList.add('auth-locked');KPApi.status().then(function(s){state.authenticated=!!s.authenticated;$('loginButton').title=s.authenticated?'Профиль':'Войти';if(s.authenticated)initializeAuthenticatedApp();else{applySubscription(null);showAuthGate();}}).catch(function(){applySubscription(null);showAuthGate();});setInterval(function(){if(state.authenticated)loadProfile(false);},6*60*60*1000);document.addEventListener('visibilitychange',function(){if(!document.hidden&&state.authenticated&&Date.now()-state.profileCheckedAt>30*60*1000)loadProfile(false);});
 }());
