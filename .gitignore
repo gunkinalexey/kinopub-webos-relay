@@ -3,3 +3,6 @@ rebuild_containers.bat
 # Saved kino.watch pages: 14 MB of third-party assets, and each one carries a
 # live csrf-token from the session they were saved in.
 examples/
+# frontend/tests/: npm install artifacts and the regenerated preview page
+frontend/tests/node_modules/
+frontend/tests/preview.html

@@ -1,0 +1,54 @@
+{
+  "id": "77035",
+  "type": "serial",
+  "title": "Тед Лассо",
+  "original_title": "Ted Lasso",
+  "year": 2020,
+  "rating": 9.6,
+  "imdb_rating": 8.7,
+  "imdb_votes": 453363,
+  "kinopoisk_rating": 8.5,
+  "kinopoisk_votes": 142415,
+  "genres": ["Комедия", "Драма", "Спортивные"],
+  "countries": ["США", "Великобритания"],
+  "director": "Деклан Лаундес",
+  "cast": ["Джейсон Судейкис", "Бретт Голдстин", "Ханна Уэддингем", "Джуно Темпл"],
+  "duration": 2700,
+  "quality": "2160p",
+  "votes": { "positive": 2834, "negative": 103 },
+  "finished": false,
+  "seasons_count": 4,
+  "episodes_count": 36,
+  "subtitle_langs": ["rus", "eng"],
+  "audio_langs": ["rus", "eng"],
+  "poster": "https://example.invalid/poster.jpg",
+  "backdrop": "https://example.invalid/backdrop.jpg",
+  "description": "Американский тренер по американскому футболу возглавляет английский футбольный клуб, ничего не понимая в европейском футболе, но отлично понимая людей.",
+  "watched": 0,
+  "media": [],
+  "seasons": [
+    {
+      "number": 1,
+      "episodes": [
+        { "id": "813082", "season": 1, "episode": 1, "title": "Пилот", "duration": 2700,
+          "thumbnail": "https://example.invalid/e1.jpg",
+          "audios": [
+            { "lang": "rus", "type": { "title": "Дубляж" }, "author": { "title": "LostFilm" }, "channels": 6, "codec": "eac3" },
+            { "lang": "eng", "type": { "title": "Оригинал" }, "channels": 2, "codec": "aac" }
+          ],
+          "subtitles": [{ "lang": "rus", "url": "https://example.invalid/ru.srt" }] },
+        { "id": "813841", "season": 1, "episode": 2, "title": "Ставки", "duration": 2640,
+          "thumbnail": "https://example.invalid/e2.jpg", "audios": [], "subtitles": [] }
+      ]
+    },
+    {
+      "number": 2,
+      "episodes": [
+        { "id": "840826", "season": 2, "episode": 1, "title": "Прощай, Эрл", "duration": 1980,
+          "thumbnail": "https://example.invalid/e3.jpg", "audios": [], "subtitles": [] }
+      ]
+    },
+    { "number": 3, "episodes": [] },
+    { "number": 4, "episodes": [] }
+  ]
+}

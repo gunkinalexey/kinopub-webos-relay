@@ -1,0 +1,120 @@
+// History section, the 3D route, and the Фильмы/3D heading toggle, driven
+// through the real app.js against the real index.html markup.
+const fs = require('fs');
+const path = require('path');
+const { JSDOM } = require('jsdom');
+
+const FRONT = process.argv[3] || path.join(__dirname, '..');
+const html = fs.readFileSync(path.join(FRONT, 'index.html'), 'utf8');
+const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true });
+const { window } = dom;
+global.window = window; global.document = window.document;
+global.screen = window.screen; global.navigator = window.navigator;
+global.sessionStorage = { clear(){} }; global.localStorage = { removeItem(){} };
+global.Hls = undefined; global.setInterval = () => 0; global.clearInterval = () => {};
+
+const DAY = 86400;
+const now = Math.floor(Date.now() / 1000);
+const HISTORY = {
+  '': [
+    { id:'1', type:'movie',  title:'Сегодняшний фильм', watched_at: now - 60 },
+    { id:'2', type:'serial', title:'Ещё сегодня',       watched_at: now - 7200 },
+    { id:'3', type:'movie',  title:'Вчерашний',         watched_at: now - DAY - 60 },
+    { id:'4', type:'3d',     title:'Позавчера',         watched_at: now - 3 * DAY },
+  ],
+  movie: [{ id:'1', type:'movie', title:'Только фильм', watched_at: now - 60 }],
+  '3d':  [{ id:'4', type:'3d',    title:'Только 3D',    watched_at: now - 3 * DAY }],
+};
+
+const calls = [];
+global.KPApi = {
+  status:()=>new Promise(()=>{}), settings:()=>new Promise(()=>{}), profile:()=>new Promise(()=>{}),
+  report:()=>Promise.resolve(), watchingStatuses:()=>Promise.resolve({statuses:{}}),
+  history:()=>Promise.resolve({items:[]}), hlsAudioVariants:()=>Promise.resolve({count:0}),
+  createAudioHls:()=>new Promise(()=>{}), audioHlsStatus:()=>new Promise(()=>{}),
+  stopAudioHls:()=>Promise.resolve({}), item:()=>new Promise(()=>{}),
+  pageCount:()=>new Promise(()=>{}),
+  catalog:(section,feed,page)=>{ calls.push(['catalog',section,feed,page]);
+    return Promise.resolve({items:[],page:page||0,total_pages:3,total_items:0,has_next:true}); },
+  kinoHistory:(page,type)=>{ calls.push(['history',page,type||'']);
+    return Promise.resolve({items:HISTORY[type||'']||[],page:page||0,total_pages:2,total_items:4,has_next:true}); },
+  imageProxyUrl:u=>u, streamProxyUrl:u=>u, hlsProxyUrl:u=>u, subtitleProxyUrl:u=>u,
+};
+window.KPApi = global.KPApi;
+
+const src = fs.readFileSync(process.argv[2] || path.join(FRONT, 'app.js'), 'utf8');
+eval(src.replace('}());', 'global.__app={state:state,route:route,renderCatalog:renderCatalog,'
+  + 'setHistoryType:setHistoryType,routes:routes,dayLabel:historyDayLabel};}());'));
+const app = global.__app, st = app.state;
+
+let failures = 0;
+const check = (n, got, want) => {
+  const ok = JSON.stringify(got) === JSON.stringify(want);
+  if (!ok) failures++;
+  console.log(`${ok?'PASS':'FAIL'}  ${n}\n        got ${JSON.stringify(got)}${ok?'':`\n        want ${JSON.stringify(want)}`}`);
+};
+const settle = () => new Promise(r => setTimeout(r, 20));
+const qa = s => [...document.querySelectorAll(s)];
+const click = el => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+(async () => {
+  console.log('--- 3D is its own section, reachable from the sidebar ---');
+  check('3d route exists', !!app.routes['3d'], true);
+  check('3d asks upstream for the 3d section', [app.routes['3d'].section, app.routes['3d'].feed], ['3d','all']);
+  check('sidebar History button is wired',
+    !!document.querySelector('[data-route="history"]'), true);
+
+  calls.length = 0; app.route('3d'); await settle();
+  check('opening 3D requests the 3d section', calls[0], ['catalog','3d','all',0]);
+
+  console.log('--- Фильмы / 3D heading toggle ---');
+  check('heading offers both', qa('.title-link').map(b => b.textContent), ['Фильмы','3D']);
+  check('3D marked current while on 3D',
+    qa('.title-link').map(b => b.classList.contains('title-current')), [false,true]);
+  calls.length = 0; click(qa('[data-route-inline="movie"]')[0]); await settle();
+  check('clicking Фильмы goes to the film list', calls[0], ['catalog','movie','all',0]);
+  check('Фильмы marked current while on Фильмы',
+    qa('.title-link').map(b => b.classList.contains('title-current')), [true,false]);
+  // the second visit is served from the catalogue cache, so assert on the route
+  click(qa('[data-route-inline="3d"]')[0]); await settle();
+  check('clicking 3D goes to the 3D list, not back to films', st.route, '3d');
+  check('and the heading follows',
+    qa('.title-link').map(b => b.classList.contains('title-current')), [false,true]);
+
+  console.log('--- History section ---');
+  calls.length = 0; app.route('history'); await settle();
+  check('requests page 0, all types', calls[0], ['history',0,'']);
+  check('heading', document.querySelector('#catalogTop h3').textContent, 'История просмотров');
+  check('type tabs', qa('.history-tabs .catalog-tab').map(b => b.textContent),
+    ['Все','Фильмы','Сериалы','3D','Концерты','Докуфильмы','Докусериалы','ТВ Шоу']);
+  check('grid switches to the day-grouped list',
+    document.getElementById('catalogGrid').className, 'history-list');
+  check('one heading per distinct day', qa('.history-day').map(h => h.textContent),
+    ['Сегодня','Вчера', app.dayLabel(now - 3 * DAY)]);
+  check('today groups both of its items',
+    qa('.history-day')[0].nextElementSibling.querySelectorAll('.media-card').length, 2);
+  check('cards render for every entry', qa('.media-card').length, 4);
+
+  console.log('--- type filter ---');
+  calls.length = 0; click(qa('.history-tabs .catalog-tab')[1]); await settle();
+  check('Фильмы tab asks upstream for movie', calls[0], ['history',0,'movie']);
+  check('active tab moved', document.querySelector('.history-tabs .catalog-tab.active').textContent, 'Фильмы');
+  check('list replaced, not appended', qa('.media-card').length, 1);
+  calls.length = 0; click(qa('.history-tabs .catalog-tab')[3]); await settle();
+  check('3D tab asks upstream for 3d', calls[0], ['history',0,'3d']);
+
+  console.log('--- paging is tracked per type ---');
+  app.setHistoryType('');
+  await settle();
+  calls.length = 0;
+  const next = qa('#catalogPagination .page-button').filter(b => b.textContent === '2')[0];
+  check('pagination rendered', !!next, true);
+  if (next) { click(next); await settle(); check('page 2 requested for the same filter', calls[0], ['history',1,'']); }
+
+  console.log('--- leaving history restores the poster grid ---');
+  calls.length = 0; app.route('movie'); await settle();
+  check('grid class restored', document.getElementById('catalogGrid').className, 'poster-grid');
+
+  console.log(failures ? `\n${failures} FAILURE(S)` : '\nAll checks passed');
+  process.exit(failures ? 1 : 0);
+})();
