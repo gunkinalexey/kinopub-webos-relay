@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.71', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.73', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -414,9 +414,18 @@ def normalize_catalog_item(raw: Dict[str, Any]) -> Dict[str, Any]:
     poster = _image_url(raw.get('posters') or raw.get('poster') or raw.get('images') or raw.get('image'))
     # The public KinoPub frontend uses a stable poster path derived from item ID.
     # This also covers compact API payloads where no posters field is included.
+    # 'big' is 500x750; 'medium' is only 250x375 and was being upscaled.
     if not poster and item_id.isdigit():
-        poster = f'https://m.staticpop.net/poster/item/medium/{item_id}.jpg'
-    backdrop = _image_url(raw.get('background') or raw.get('backdrop') or raw.get('covers') or raw.get('posters'), 'big') or poster
+        poster = f'https://m.staticpop.net/poster/item/big/{item_id}.jpg'
+    # The CDN also serves a real 16:9 backdrop under 'wide' (up to 3840x2160).
+    # Falling back to the poster meant stretching a 2:3 image across a wide
+    # strip, which is why it looked soft and badly cropped. 'wide' is missing
+    # for a fair share of items, so the poster stays as the fallback and the
+    # image proxy switches to it when the wide URL 404s.
+    backdrop = _image_url(raw.get('background') or raw.get('backdrop') or raw.get('covers'), 'big')
+    if not backdrop and item_id.isdigit():
+        backdrop = f'https://m.staticpop.net/poster/item/wide/{item_id}.jpg'
+    backdrop = backdrop or _image_url(raw.get('posters'), 'big') or poster
     # KinoPub payloads vary between list/detail endpoints. Never derive one
     # rating from another: each badge is populated only from its own source.
     kinopub_rating, kinopub_score = _extract_kinopub_rating(raw)
@@ -443,6 +452,7 @@ def normalize_catalog_item(raw: Dict[str, Any]) -> Dict[str, Any]:
         'genres': [x for x in genres if x],
         'poster': poster,
         'backdrop': backdrop,
+        'backdrop_fallback': poster if backdrop != poster else '',
         'description': str(_pick_first(raw, ['plot', 'description', 'overview'], '')),
         'watched': _extract_watched_status(raw),
     }
@@ -1437,7 +1447,10 @@ async def profile(refresh: bool = False, kp_session: Optional[str] = Cookie(defa
         raise
 
 @app.get('/auth/status')
-def auth_status(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, bool]:
+# Dict[str, Any], not Dict[str, bool]: FastAPI validates the response against
+# this annotation, and `expires_in` is a number. A bool-only model made every
+# authenticated call return 500, so reloading the page looked like a lost login.
+def auth_status(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
     try:
         row = session_get(kp_session)
         return {
@@ -1651,14 +1664,18 @@ async def image_proxy(
     width: int = 0,
     height: int = 0,
     quality: int = 82,
+    fallback: str = '',
 ):
     """Same-origin image proxy with optional resizing for TV browsers.
 
     Poster requests use a small fixed size, while detail backdrops use a larger
     size. JPEG output is broadly compatible with older webOS browsers and is
     substantially smaller than the original source images.
+
+    ``fallback`` is fetched when the primary URL is missing. The CDN only has a
+    wide 16:9 backdrop for some items, and a CSS background cannot retry a 404,
+    so the substitution happens here and the client stays unaware.
     """
-    safe_url = await validate_stream_url(url)
     width = max(0, min(int(width or 0), 1920))
     height = max(0, min(int(height or 0), 1080))
     quality = max(55, min(int(quality or 82), 92))
@@ -1668,12 +1685,24 @@ async def image_proxy(
     }
     if IMAGE_REFERER:
         headers['Referer'] = IMAGE_REFERER
-    try:
-        upstream = await app.state.http.get(safe_url, headers=headers, follow_redirects=True)
-    except httpx.TimeoutException as exc:
-        raise HTTPException(504, 'Image request timed out') from exc
-    except httpx.RequestError as exc:
-        raise HTTPException(502, f'Could not load image: {exc}') from exc
+
+    async def fetch(target: str):
+        safe = await validate_stream_url(target)
+        try:
+            return await app.state.http.get(safe, headers=headers, follow_redirects=True)
+        except httpx.TimeoutException as exc:
+            raise HTTPException(504, 'Image request timed out') from exc
+        except httpx.RequestError as exc:
+            raise HTTPException(502, f'Could not load image: {exc}') from exc
+
+    safe_url = url
+    upstream = await fetch(url)
+    if upstream.status_code >= 400 and fallback:
+        log_event('image', 'Primary image missing, using fallback', {
+            'status': upstream.status_code, 'host': urlparse(url).hostname,
+        })
+        safe_url = fallback
+        upstream = await fetch(fallback)
     if upstream.status_code >= 400:
         raise HTTPException(upstream.status_code, 'Upstream image request failed')
     content_type = upstream.headers.get('content-type', '').split(';', 1)[0].strip().lower()

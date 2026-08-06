@@ -32,7 +32,10 @@ function esc(v){var d=document.createElement('div');d.textContent=String(v==null
 function fmt(s){s=isFinite(s)?Math.max(0,Math.floor(s)):0;var h=Math.floor(s/3600),m=Math.floor(s/60)%60,x=s%60;return(h?(h<10?'0':'')+h+':':'')+(m<10?'0':'')+m+':'+(x<10?'0':'')+x;}
 function visibleFocus(){var n=document.querySelectorAll('.focusable:not([disabled])'),a=[];for(var i=0;i<n.length;i++)if(n[i].offsetParent!==null)a.push(n[i]);return a;}
 function focusFirst(){var a=visibleFocus();if(a[0])a[0].focus();}
-function bgCss(v,kind){if(!v)return '#283248';if(/^https?:/i.test(v)){var clean=String(v).replace(/"/g,'');var isBackdrop=kind==='backdrop';var w=isBackdrop?1280:420,h=isBackdrop?720:630,q=isBackdrop?80:82;return 'center/cover no-repeat url("'+KPApi.imageProxyUrl(clean,state.cacheVersion,w,h,q)+'")';}return v;}
+// The backdrop is a real 16:9 image now, so a full 1920x1080 is worth
+// asking for; posters come from the 500x750 source instead of 250x375 and
+// are no longer upscaled. `fallback` covers items with no wide backdrop.
+function bgCss(v,kind,fallback){if(!v)return '#283248';if(/^https?:/i.test(v)){var clean=String(v).replace(/"/g,'');var isBackdrop=kind==='backdrop';var w=isBackdrop?1920:420,h=isBackdrop?1080:630,q=82;var alt=fallback&&/^https?:/i.test(fallback)?String(fallback).replace(/"/g,''):'';return 'center/cover no-repeat url("'+KPApi.imageProxyUrl(clean,state.cacheVersion,w,h,q,alt)+'")';}return v;}
 function ratingText(value){var n=parseFloat(value);if(!isFinite(n)||n<0||n>10)return '—';return n.toFixed(1).replace('.0','');}
 function kinopubText(item){return ratingText(item.rating);}
 function ratings(item){return [kinopubText(item),ratingText(item.imdb_rating),ratingText(item.kinopoisk_rating)];}
@@ -224,7 +227,7 @@ function renderDetails(item){
  state.current=item;
  $('detailsTitle').textContent=item.title||'';
  $('detailsOriginal').textContent=[item.original_title||'',item.year||''].filter(Boolean).join(' · ');
- $('detailsBackdrop').style.background=bgCss(item.backdrop||item.poster,'backdrop');
+ $('detailsBackdrop').style.background=bgCss(item.backdrop||item.poster,'backdrop',item.backdrop_fallback||item.poster);
  $('detailsPoster').style.background=bgCss(item.poster,'poster');
  var votes=item.votes||{},up=Number(votes.positive)||0,down=Number(votes.negative)||0;
  $('detailsVotes').innerHTML=(up||down)?'<div class="details-vote details-vote-up">▲ '+esc(up)+'</div><div class="details-vote details-vote-down">▼ '+esc(down)+'</div>':'';
@@ -242,7 +245,7 @@ function openDetails(item){
  $('detailsOriginal').textContent='';
  $('detailsTabs').innerHTML='';$('detailsInfo').innerHTML='';$('detailsEpisodes').innerHTML='';
  $('detailsTabBody').textContent='Получаем сведения и список видео…';
- $('detailsBackdrop').style.background=bgCss(item.backdrop||item.poster,'backdrop');
+ $('detailsBackdrop').style.background=bgCss(item.backdrop||item.poster,'backdrop',item.backdrop_fallback||item.poster);
  $('detailsPoster').style.background=bgCss(item.poster,'poster');
  KPApi.item(item.id).then(function(full){for(var k in item)if(full[k]===undefined)full[k]=item[k];renderDetails(full);}).catch(function(){renderDetails(item);});
 }
