@@ -21,20 +21,23 @@ a specific past change.
    details screen (top-right, symmetric to "← Назад") calls it. See
    `README.md` v0.9.80 (backend) for the full writeup.
 
-2. **The "4K" poster badge is probably misleading — asked the user, no
-   answer yet.** Added this session (`posterBadges()` in
-   [app.js](frontend/app.js), driven by `item.quality` from
-   `normalize_catalog_item` in [main.py](backend/app/main.py)). Just
-   discovered: catalogue `quality` (used for the 4K-vs-HD badge decision)
-   does **not** reliably match what's actually encoded and playable.
-   Checked 23 titles the catalogue tags `quality: 2160` — **0 of 23** had an
-   actual 2160p file in `v1/items/{id}`'s raw `videos[].files[]` (confirmed
-   in the *raw* KinoPub response, before any of this backend's processing —
-   not something we're filtering out). `quality` on the list endpoint looks
-   like a "what the source was" tag, not "what's streamable". Asked the user
-   whether to (a) drop the 4K badge since it's currently never true for
-   anything checked, or (b) keep it but relabel so it doesn't promise
-   playback that won't happen. Waiting on their call.
+2. ~~**The "4K" poster badge is probably misleading**~~ — **that conclusion
+   was WRONG, and the badge is fine.** The "0 of 46 titles tagged
+   `quality: 2160` actually have a 2160p file" finding was an artifact of
+   the device profile, not a property of the catalogue. KinoPub serves a
+   **different file set per title depending on the device's
+   `support4k`/`supportHevc` flags** — proven causally by toggling them and
+   re-reading `v1/items/{id}`:
+
+       support4k=1 supportHevc=1 -> 2160p h265, 1080p h265, 720p, 480p
+       support4k=0 supportHevc=1 -> 1080p h265, 720p, 480p
+       support4k=0 supportHevc=0 -> 1080p h264, 720p, 480p   <- what I saw
+
+   At the time of that investigation the device was declared non-4K/non-HEVC,
+   so 4K files were simply not offered. The catalogue `quality` field was
+   truthful all along. **Do not "fix" the badge.** The flags are now reported
+   from real browser probes via `POST /device/capabilities` — see README.md
+   v0.9.91 / backend 0.9.84.
 
 ## What this project is
 
@@ -64,7 +67,7 @@ of guessing from docs — used constantly this session, keep using it.
 - Backend running version: **0.9.79**, containers up via `docker compose up -d`
 - `curl http://localhost:8080/bridge/health` to check it's alive
 - Working tree clean — the auto-commit hook (see below) picks up every turn
-- 159 frontend checks + 17 backend smoke checks, all green (see Testing below)
+- 184 frontend checks + 17 backend smoke checks, all green (see Testing below)
 
 ## How work has been happening (read this before doing anything)
 
@@ -205,7 +208,7 @@ Carried forward from before, still true unless someone's addressed them:
 
 New from this session:
 
-- **4K badge accuracy — see open item #2 at the top.**
+- ~~4K badge accuracy~~ — resolved, the badge was right; see item #2 at the top.
 - **`v1/collections`** (real curated collections/подборки) and
   **`v1/bookmarks`** (real per-account bookmark folders — the "Закладки"
   sidebar button is still dead, no `data-route`) are both confirmed-real,
@@ -224,7 +227,10 @@ file `eval`s the real source with the closing `}());` swapped to also expose
 functions under test on `global.__app`. Four use hand-rolled DOM stubs
 (fast, no deps); four (`sections.js`, `actions.js`, `episodes.js`,
 `panel.js`) load the real `index.html` into `jsdom`. See
-`frontend/tests/README.md` for the run recipe. **159 checks, 0 failures**.
+`frontend/tests/README.md` for the run recipe. **184 checks, 0 failures**.
+Note: `npm install` for the four jsdom-based suites is intermittently very
+slow in this sandbox (minutes, sometimes appears to hang) — it does succeed,
+so run the suite in the background rather than assuming the registry is down.
 Run via (PowerShell, not Bash — see Docker note above):
 ```
 docker run --rm -v "D:\pets\kinopub-webos-client\frontend:/f:ro" -w /tmp node:20-alpine sh -c "cp -r /f /tmp/frontend && cd /tmp/frontend/tests && npm install --silent >/dev/null 2>&1 && node harness.js ../app.js && node subs.js ../app.js && node misc.js ../app.js && node quality.js ../app.js && node sections.js ../app.js && node actions.js ../app.js && node episodes.js ../app.js && node panel.js ../app.js"

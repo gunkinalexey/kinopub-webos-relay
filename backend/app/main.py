@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.83', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.84', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -161,6 +161,16 @@ class SettingsPayload(BaseModel):
     # is what usually promotes it to the hardware video plane (and with it HDR
     # passthrough), at the cost of replacing the custom controls with native ones.
     player_fullscreen: str = 'layer'
+
+
+class CapabilitiesPayload(BaseModel):
+    """What the browser reports it can actually decode/display.
+
+    Drives KinoPub's per-device file selection (see /device/capabilities).
+    """
+    hevc: bool = False
+    uhd: bool = False
+    hdr: bool = False
 
 
 class ProgressPayload(BaseModel):
@@ -1660,17 +1670,56 @@ async def _ensure_device_registered(sid: str, session: Dict[str, Any]) -> None:
                 'hardware': 'Web Browser',
                 'software': f'kinopub-webos-client/{app.version}',
             })
-        device_id = device.get('id')
-        settings = device.get('settings') if isinstance(device.get('settings'), dict) else {}
-        def _flag(name: str) -> bool:
-            entry = settings.get(name)
-            return bool(entry.get('value')) if isinstance(entry, dict) else False
-        if device_id and not (_flag('support4k') and _flag('supportHevc')):
-            await kino_post(session, f'v1/device/{device_id}/settings', {'support4k': True, 'supportHevc': True})
-        log_event('device', 'Device info registered with KinoPub', {'device_id': device_id})
+        log_event('device', 'Device info registered with KinoPub', {'device_id': device.get('id')})
     except HTTPException as exc:
         _device_registered_sids.discard(sid)
         log_event('device', 'Device registration failed', {'status': exc.status_code})
+
+
+def _device_flag(settings: Any, name: str) -> bool:
+    entry = settings.get(name) if isinstance(settings, dict) else None
+    return bool(entry.get('value')) if isinstance(entry, dict) else False
+
+
+@app.post('/device/capabilities')
+async def device_capabilities(payload: CapabilitiesPayload, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """Tell KinoPub what this browser can actually decode.
+
+    This is not cosmetic: KinoPub serves a **different set of files** per
+    title depending on the device's `supportHevc`/`support4k` flags -
+    verified live on one title by toggling the flags and re-reading
+    `v1/items/{id}`:
+
+        support4k=1 supportHevc=1 -> 2160p h265, 1080p h265, 720p, 480p
+        support4k=0 supportHevc=1 -> 1080p h265, 720p, 480p
+        support4k=0 supportHevc=0 -> 1080p h264, 720p, 480p
+
+    So "open at the highest quality this device can play" is decided here,
+    before the player ever sees a stream list: report the truth and the
+    top entry KinoPub returns is playable by construction. Reporting a
+    blanket `true` (what the previous version did) would hand an
+    HEVC-incapable browser an HEVC-only list it cannot play at all.
+
+    Written only when a flag actually differs, so the common case is one
+    read and no write.
+    """
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    info = await kino_get(session, 'v1/device/info', {})
+    device = info.get('device') if isinstance(info, dict) else {}
+    if not isinstance(device, dict):
+        device = {}
+    device_id = device.get('id')
+    settings = device.get('settings') if isinstance(device.get('settings'), dict) else {}
+    desired = {
+        'supportHevc': bool(payload.hevc),
+        'support4k': bool(payload.uhd),
+        'supportHdr': bool(payload.hdr),
+    }
+    changed = {name: value for name, value in desired.items() if _device_flag(settings, name) != value}
+    if device_id and changed:
+        await kino_post(session, f'v1/device/{device_id}/settings', changed)
+        log_event('device', 'Device capabilities updated', {'device_id': device_id, 'changed': changed})
+    return {'device_id': device_id, 'applied': desired, 'changed': sorted(changed)}
 
 
 @app.get('/auth/status')

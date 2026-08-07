@@ -1,5 +1,5 @@
 (function(){'use strict';
-var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:Date.now(),catalogPages:{},catalogTotals:{},searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
+var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:Date.now(),catalogPages:{},catalogTotals:{},searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
 var $=function(id){return document.getElementById(id);},video=$('video');
 // Every backend call that needs a session (catalog, history, profile, item
 // details...) raises a real HTTP 401 the moment the cookie is gone or
@@ -597,21 +597,121 @@ function closeDetails(){showScreen(state.detailsReturn||'catalogScreen');var bac
 function firstNonEmptyList(){for(var i=0;i<arguments.length;i++){var v=arguments[i];if(v&&typeof v!=='string'&&typeof v.length==='number'&&v.length)return Array.prototype.slice.call(v);}return [];}
 function optionUrl(value){if(!value)return '';if(typeof value==='string')return value.indexOf('http')===0?value:'';return value.url||value.src||value.file||value.link||'';}
 function streamQualityLabel(st,index){var q=st.quality||((st.height||'')+(st.height?'p':''));if(!q)q='Вариант '+(index+1);var extra=[];if(st.codec)extra.push(String(st.codec).toUpperCase());if(st.source_type)extra.push(String(st.source_type).toUpperCase());return String(q)+(extra.length?' · '+extra.join(' · '):'');}
+// Variants this device cannot decode are dropped from the menu entirely -
+// offering a choice that is guaranteed to fail is worse than not offering
+// it. If *nothing* is decodable they are all kept instead (marked), because
+// an empty quality menu tells the user nothing about why; `keepIndex` is
+// likewise always kept so the currently-playing entry can never vanish from
+// the control that is supposed to show it.
+function renderQualityMenu(keepIndex){
+ var groups=state.playerStreams||[],q=$('playerQuality');
+ if(!q)return;
+ var anyDecodable=false;
+ for(var i=0;i<groups.length;i++)if(groupDecodable(groups[i])){anyDecodable=true;break;}
+ q.innerHTML='';
+ for(var j=0;j<groups.length;j++){
+  var decodable=groupDecodable(groups[j]);
+  if(anyDecodable&&!decodable&&j!==keepIndex)continue;
+  var o=document.createElement('option');
+  o.value=String(j);
+  o.textContent=streamQualityLabel(groups[j],j)+(decodable?'':' · не поддерживается');
+  q.appendChild(o);
+ }
+ if(!q.children.length&&groups.length){var only=document.createElement('option');only.value='0';only.textContent=streamQualityLabel(groups[0],0);q.appendChild(only);}
+}
 function streamGroupKey(st){if(st&&st.file)return 'file:'+String(st.file);return [st&&st.height||'',st&&st.width||'',st&&st.quality||'',st&&st.codec||''].join('|');}
 function preparePlayerOptions(result,selected){var streams=result.streams||[],groups=[],byKey={};for(var i=0;i<streams.length;i++){var st=streams[i];if(!st||!st.url)continue;var key=streamGroupKey(st),group=byKey[key];if(!group){group={quality:st.quality,height:st.height,width:st.width,codec:st.codec,file:st.file,variants:{},url:st.url,source_type:st.source_type,protocol:st.protocol};byKey[key]=group;groups.push(group);}var type=String(st.source_type||st.protocol||'http').toLowerCase();group.variants[type]=st.url;if(type.indexOf('hls')===0&&!group.variants.hls)group.variants.hls=st.url;if((type==='http'||st.protocol==='http')&&!group.variants.http)group.variants.http=st.url;}
 groups.sort(function(a,b){return Number(b.height||0)-Number(a.height||0);});for(var g=0;g<groups.length;g++){groups[g].source_type=groups[g].variants.hls?'hls':'http';groups[g].protocol=groups[g].variants.hls?'hls':'http';groups[g].url=groups[g].variants.http||groups[g].variants.hls||groups[g].url;}
-state.playerStreams=groups;state.playerSubtitles=firstNonEmptyList(result.subtitles,result.media&&result.media.subtitles);state.playerAudios=firstNonEmptyList(result.audios,result.media&&result.media.audios);state.expectedTracks=Number(result.expected_tracks)||0;state.altAudioProbe={};state.altAudioUrl='';state.pendingAltAudioIndex=-1;if(state.expectedTracks>state.playerAudios.length)KPApi.report('Audio track list is shorter than KinoPub reported',{expected:state.expectedTracks,received:state.playerAudios.length,media_id:result.media&&result.media.id},'media').catch(function(){});var q=$('playerQuality');q.innerHTML='';for(var j=0;j<groups.length;j++){var o=document.createElement('option');o.value=String(j);o.textContent=streamQualityLabel(groups[j],j);q.appendChild(o);}var selectedIndex=bestPlayableGroupIndex();if(selectedIndex<0){selectedIndex=0;for(var k=0;k<groups.length;k++){var variants=groups[k].variants||{};if(selected&&((selected.file&&groups[k].file===selected.file)||variants.http===selected.url||variants.hls===selected.url||variants.hls2===selected.url||variants.hls4===selected.url)){selectedIndex=k;break;}}}state.playerQualityIndex=String(selectedIndex);q.value=state.playerQualityIndex;state.playerSubtitleChoice=preferredSubtitleChoice();state.subtitleMountKey='';applySubtitleSize(state.settings&&state.settings.subtitle_size);populateSubtitleMenu();populateAudioMenu();}
+state.playerStreams=groups;state.playerSubtitles=firstNonEmptyList(result.subtitles,result.media&&result.media.subtitles);state.playerAudios=firstNonEmptyList(result.audios,result.media&&result.media.audios);state.expectedTracks=Number(result.expected_tracks)||0;state.altAudioProbe={};state.altAudioUrl='';state.pendingAltAudioIndex=-1;if(state.expectedTracks>state.playerAudios.length)KPApi.report('Audio track list is shorter than KinoPub reported',{expected:state.expectedTracks,received:state.playerAudios.length,media_id:result.media&&result.media.id},'media').catch(function(){});var selectedIndex=bestPlayableGroupIndex();renderQualityMenu(selectedIndex);state.playerQualityIndex=String(selectedIndex<0?0:selectedIndex);$('playerQuality').value=state.playerQualityIndex;state.playerSubtitleChoice=preferredSubtitleChoice();state.subtitleMountKey='';applySubtitleSize(state.settings&&state.settings.subtitle_size);populateSubtitleMenu();populateAudioMenu();}
 // What this device can actually decode and display. Probed once: the answer
 // decides which quality variant is worth asking for, because a 2160p HEVC
 // stream is only an upgrade if the hardware can play it.
-var HEVC_MIME='video/mp4; codecs="hvc1.1.6.L150.B0"',H264_MIME='video/mp4; codecs="avc1.640028"';
+// Level matters, not just the codec family: L150 (5.0) and L153 (5.1) are the
+// 2160p-capable HEVC/H.264 levels, L120/L40 the 1080p ones. A device can
+// perfectly well decode 1080p HEVC and still refuse 4K, so probing only a
+// 4K-level string would under-report HEVC, and probing only a 1080p one
+// would over-report 4K. Both are asked separately.
+var HEVC_MIME='video/mp4; codecs="hvc1.1.6.L120.B0"',HEVC_4K_MIME='video/mp4; codecs="hvc1.1.6.L150.B0"';
+var H264_MIME='video/mp4; codecs="avc1.640028"',H264_4K_MIME='video/mp4; codecs="avc1.640033"';
 function probeCodec(mime){var el='',mse=false;try{el=video.canPlayType(mime)||'';}catch(e){}try{mse=!!(window.MediaSource&&MediaSource.isTypeSupported&&MediaSource.isTypeSupported(mime));}catch(e){}return {native:el==='probably'||el==='maybe',mse:mse,answer:el||'нет'};}
-function mediaCapabilities(){if(state.mediaCaps)return state.mediaCaps;var hevc=probeCodec(HEVC_MIME),h264=probeCodec(H264_MIME),hdr=false,gamut=false;try{hdr=!!(window.matchMedia&&(matchMedia('(dynamic-range: high)').matches||matchMedia('(video-dynamic-range: high)').matches));}catch(e){}try{gamut=!!(window.matchMedia&&matchMedia('(color-gamut: p3)').matches);}catch(e){}state.mediaCaps={hevc:hevc,h264:h264,hdrDisplay:hdr,wideGamut:gamut};return state.mediaCaps;}
+function mediaCapabilities(){if(state.mediaCaps)return state.mediaCaps;var hevc=probeCodec(HEVC_MIME),hevc4k=probeCodec(HEVC_4K_MIME),h264=probeCodec(H264_MIME),h2644k=probeCodec(H264_4K_MIME),hdr=false,gamut=false;try{hdr=!!(window.matchMedia&&(matchMedia('(dynamic-range: high)').matches||matchMedia('(video-dynamic-range: high)').matches));}catch(e){}try{gamut=!!(window.matchMedia&&matchMedia('(color-gamut: p3)').matches);}catch(e){}state.mediaCaps={hevc:hevc,hevc4k:hevc4k,h264:h264,h2644k:h2644k,hdrDisplay:hdr,wideGamut:gamut};return state.mediaCaps;}
+function codecSupported(caps,isHevc){var probe=isHevc?caps.hevc:caps.h264;return !!(probe&&(probe.native||probe.mse));}
+// KinoPub decides which files to even offer from the device's declared
+// support flags (verified live - see /device/capabilities in main.py), so
+// these must describe the real browser, not a hopeful `true`.
+function reportedCapabilities(){var caps=mediaCapabilities();var uhd=!!((caps.hevc4k.native||caps.hevc4k.mse)||(caps.h2644k.native||caps.h2644k.mse));return {hevc:codecSupported(caps,true),uhd:uhd,hdr:!!caps.hdrDisplay};}
+function syncDeviceCapabilities(){var caps=reportedCapabilities();return KPApi.reportCapabilities(caps).then(function(res){state.deviceCaps=res;return res;}).catch(function(){return null;});}
 function qualityCap(){var raw=state.settings&&state.settings.quality;var n=parseInt(raw,10);return isFinite(n)&&n>0?n:0;}
-// Highest variant this device can play, honouring the quality ceiling from
-// settings. Groups are already sorted by height, tallest first.
-function bestPlayableGroupIndex(){var caps=mediaCapabilities(),cap=qualityCap(),groups=state.playerStreams||[];for(var i=0;i<groups.length;i++){var g=groups[i],h=Number(g.height)||0;if(cap&&h>cap)continue;if(isHevcGroup(g)&&!(caps.hevc.native||caps.hevc.mse))continue;return i;}return groups.length?groups.length-1:-1;}
+// Can this device decode this variant at all? Separate from the quality
+// ceiling, which is a user preference rather than a hard limit: an
+// undecodable variant must never be auto-selected, a capped-out one may be
+// if nothing else is left.
+function groupDecodable(group){var caps=mediaCapabilities();return codecSupported(caps,isHevcGroup(group));}
+// Highest variant this device can actually decode, honouring the quality
+// ceiling from settings. Groups are already sorted by height, tallest first,
+// so the first match is the best one.
+//
+// The fallbacks matter and used to be wrong: the old version ended with
+// `groups.length-1`, i.e. the *smallest* variant, so a device that failed
+// the codec check got 480p handed to it - still undecodable, just worse.
+// Now it degrades in the order that actually helps: best decodable within
+// the cap -> best decodable ignoring the cap (the ceiling is a preference,
+// not a reason to play nothing) -> largest variant, cap and codec be damned,
+// so there is always something to attempt and report an honest error on.
+function bestPlayableGroupIndex(){
+ var cap=qualityCap(),groups=state.playerStreams||[];
+ if(!groups.length)return -1;
+ for(var i=0;i<groups.length;i++){var h=Number(groups[i].height)||0;if(cap&&h>cap)continue;if(!groupDecodable(groups[i]))continue;return i;}
+ for(var j=0;j<groups.length;j++)if(groupDecodable(groups[j]))return j;
+ return 0;
+}
 function isHevcGroup(group){var c=String(group&&group.codec||'').toLowerCase();return c==='hevc'||c==='h265'||c==='hvc1'||c==='hev1'||c==='x265';}
+// KinoPub's per-quality HLS links are the SAME master playlist - verified by
+// fetching all three for one title: byte-identical URLs, each listing every
+// rendition (3840x2160 / 1920x1080 / 1280x720 / 720x406, VIDEO-RANGE=PQ).
+// So in HLS mode the rendition is hls.js's ABR decision, never ours, and the
+// quality selector was reloading an identical manifest - pure theatre. Left
+// alone ABR starts from a deliberately cautious bandwidth estimate, which is
+// exactly why a 2160p title opened at 1080p.
+//
+// `startLevel` pins the first fragment to the best allowed rendition (opens
+// at maximum straight away); `autoLevelCapping` stops ABR from ever climbing
+// above the ceiling from settings. `force` is the explicit user pick, which
+// also freezes ABR via `currentLevel` - choosing 720p by hand should stay
+// 720p, whereas the automatic choice may still adapt downward on a weak link.
+function hlsLevelHeight(level){return Number(level&&(level.height||(level.attrs&&level.attrs.RESOLUTION&&String(level.attrs.RESOLUTION).split('x')[1])))||0;}
+function hlsLevelDecodable(level){var codecs=String((level&&(level.codecs||level.videoCodec))||'');if(!codecs)return true;var caps=mediaCapabilities();return codecSupported(caps,/hvc1|hev1|hevc|h265/i.test(codecs));}
+function bestHlsLevel(cap){
+ var hls=state.hls,levels=(hls&&hls.levels)||[],capped=-1,best=-1;
+ for(var i=0;i<levels.length;i++){
+  if(!hlsLevelDecodable(levels[i]))continue;
+  var h=hlsLevelHeight(levels[i]);
+  if(best<0||h>hlsLevelHeight(levels[best]))best=i;
+  if(!cap||h<=cap){if(capped<0||h>hlsLevelHeight(levels[capped]))capped=i;}
+ }
+ return capped>=0?capped:best;
+}
+function applyHlsLevelPreference(force){
+ var hls=state.hls;if(!hls||!hls.levels||!hls.levels.length)return -1;
+ var cap=qualityCap(),target=bestHlsLevel(cap);
+ if(target<0)return -1;
+ try{
+  hls.autoLevelCapping=cap?target:-1;
+  if(force)hls.currentLevel=target;else{hls.startLevel=target;hls.nextLevel=target;}
+ }catch(e){}
+ return target;
+}
+// The chosen entry's height, matched against what the manifest really offers.
+function hlsLevelForHeight(height){
+ var hls=state.hls,levels=(hls&&hls.levels)||[],match=-1,want=Number(height)||0;
+ for(var i=0;i<levels.length;i++){
+  if(!hlsLevelDecodable(levels[i]))continue;
+  var h=hlsLevelHeight(levels[i]);
+  if(h===want)return i;
+  if(h<=want&&(match<0||h>hlsLevelHeight(levels[match])))match=i;
+ }
+ return match;
+}
 // HEVC/HDR only reaches the panel intact when the platform decoder gets the
 // file. Going through MSE (hls.js) commonly drops HDR to SDR on webOS, so a
 // direct progressive URL is preferred for those variants when it exists.
@@ -709,7 +809,7 @@ state.streamUrl=url;state.mode=mode||'direct';state.episodeId=episodeId||'';stat
 // load() discards the old text tracks, so the mounted subtitle must be rebuilt
 // even though the choice itself has not changed.
 state.subtitleMountKey='';var restored=false;function restorePlayback(){if(restored||switchSeq!==state.streamSwitchSeq)return;restored=true;if(!isAudioHls&&isFinite(video.duration)&&video.duration>0)state.playerOriginalDuration=video.duration;var target=isAudioHls?Math.max(0,resumePosition-offset):resumePosition;if(isFinite(video.duration)&&video.duration>0)target=Math.min(target,Math.max(0,video.duration-.25));try{if(target>0)video.currentTime=target;}catch(e){}state.playerResumePosition=resumePosition;state.playerSwitching=false;populateAudioMenu();populateSubtitleMenu();applySubtitleChoice(state.playerSubtitleChoice);if(state.playerAudioChoice!=='auto'&&!isAudioHls&&!state.audioHlsPreparing)setTimeout(reapplyAudioSelection,0);if(resumePaused){keepPlayerControlsVisible();return;}startPlayback(switchSeq);}
-var source=options.localSource?url:prox(url,state.mode);if(state.mode==='hls'&&window.Hls&&Hls.isSupported()){state.hlsManifestReady=false;state.hls=new Hls({enableWorker:true,lowLatencyMode:false,backBufferLength:600,maxBufferLength:90});state.hls.attachMedia(video);state.hls.on(Hls.Events.MEDIA_ATTACHED,function(){if(switchSeq!==state.streamSwitchSeq)return;state.hls.loadSource(source);});state.hls.on(Hls.Events.MANIFEST_PARSED,function(){if(switchSeq!==state.streamSwitchSeq)return;state.hlsManifestReady=true;populateAudioMenu();populateSubtitleMenu();restorePlayback();reapplyAudioSelection();});state.hls.on(Hls.Events.AUDIO_TRACKS_UPDATED,function(){populateAudioMenu();reapplyAudioSelection();});state.hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED,function(){populateSubtitleMenu();});state.hls.on(Hls.Events.ERROR,function(evt,data){if(data&&data.fatal){$('playerError').textContent='Ошибка HLS: '+(data.details||data.type||'неизвестная ошибка');}});video.onloadedmetadata=restorePlayback;video.oncanplay=restorePlayback;return;}state.hlsManifestReady=false;video.src=source;video.onloadedmetadata=restorePlayback;video.oncanplay=restorePlayback;}
+var source=options.localSource?url:prox(url,state.mode);if(state.mode==='hls'&&window.Hls&&Hls.isSupported()){state.hlsManifestReady=false;state.hls=new Hls({enableWorker:true,lowLatencyMode:false,backBufferLength:600,maxBufferLength:90});state.hls.attachMedia(video);state.hls.on(Hls.Events.MEDIA_ATTACHED,function(){if(switchSeq!==state.streamSwitchSeq)return;state.hls.loadSource(source);});state.hls.on(Hls.Events.MANIFEST_PARSED,function(){if(switchSeq!==state.streamSwitchSeq)return;state.hlsManifestReady=true;applyHlsLevelPreference(false);populateAudioMenu();populateSubtitleMenu();restorePlayback();reapplyAudioSelection();});state.hls.on(Hls.Events.AUDIO_TRACKS_UPDATED,function(){populateAudioMenu();reapplyAudioSelection();});state.hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED,function(){populateSubtitleMenu();});state.hls.on(Hls.Events.ERROR,function(evt,data){if(data&&data.fatal){$('playerError').textContent='Ошибка HLS: '+(data.details||data.type||'неизвестная ошибка');}});video.onloadedmetadata=restorePlayback;video.oncanplay=restorePlayback;return;}state.hlsManifestReady=false;video.src=source;video.onloadedmetadata=restorePlayback;video.oncanplay=restorePlayback;watchDirectStall(switchSeq);}
 function audioHlsCanSeek(target){if(!state.audioHlsActive)return true;var local=Number(target)-Number(state.audioHlsOffset||0);if(local<0)return false;try{if(video.seekable&&video.seekable.length){for(var i=0;i<video.seekable.length;i++)if(local>=video.seekable.start(i)-.25&&local<=video.seekable.end(i)-.1)return true;return false;}}catch(e){}var d=Number(video.duration)||0;return d>0&&local<d-.1;}
 function stopAudioHlsJob(jobId){if(!jobId)return;KPApi.stopAudioHls(jobId).catch(function(){});}
 function failAudioHls(message,fallbackResume,previousChoice,token){if(token!==state.audioHlsPollToken)return;if(state.audioHlsPendingJobId){stopAudioHlsJob(state.audioHlsPendingJobId);state.audioHlsPendingJobId='';}state.audioHlsPreparing=false;state.playerAudioChoice=previousChoice||'auto';populateAudioMenu();$('playerError').textContent=message||'Не удалось подготовить выбранную звуковую дорожку.';if(fallbackResume&&!fallbackResume.paused){startPlayback();}else keepPlayerControlsVisible();}
@@ -794,11 +894,20 @@ function playChannel(ch){
  openUrl(ch.stream,'hls','',undefined);
  $('playerMode').textContent='В ЭФИРЕ';
 }
-function play(item,episode,startAt){$('playerLayer').classList.remove('live');enterPlayerFullscreen();state.playerResumePosition=Math.max(0,Number(startAt)||0);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);state.audioHlsJobId='';state.audioHlsPendingJobId='';if(!ensureSubscriptionForPlayback()){openSubscription();return;}state.audioHlsPollToken++;state.audioHlsPreparing=false;state.audioHlsActive=false;state.audioHlsOffset=0;state.audioHlsSelectedIndex=-1;state.playerAudioChoice='auto';state.playerOriginalDuration=0;state.hdrFellBack=false;state.current=item;state.episodeSeason=null;state.episodeNumber=null;$('playerTitle').textContent=item.title+(episode&&episode.title?' · '+episode.title:'');$('playerLayer').classList.remove('hidden');showPlayerControls();$('playerError').textContent='Получаем ссылку на видео…';var mediaId=episode&&(episode.media_id||episode.id);KPApi.play(item.id,mediaId).then(function(result){var st=result.selected||((result.streams||[])[0]);if(!st||!st.url)throw new Error('Ссылка на видео не найдена');preparePlayerOptions(result,st);$('playerError').textContent='';var group=currentQualityGroup(),preferred=preferredModeFor(group),initialUrl=streamUrlForGroup(group,preferred)||st.url;state.hdrAttempt=preferred==='direct'&&isHevcGroup(group);state.episodeSeason=(result.media&&result.media.season)||null;state.episodeNumber=(result.media&&result.media.episode)||null;openUrl(initialUrl,preferred,(result.media&&result.media.id)||mediaId||'');}).catch(function(err){$('playerError').textContent='Не удалось получить поток: '+(err&&err.message?err.message:String(err));KPApi.report('Resolve stream failed',{item_id:item.id,error:String(err)},'media').catch(function(){});});}
+function play(item,episode,startAt){$('playerLayer').classList.remove('live');enterPlayerFullscreen();state.playerResumePosition=Math.max(0,Number(startAt)||0);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);state.audioHlsJobId='';state.audioHlsPendingJobId='';if(!ensureSubscriptionForPlayback()){openSubscription();return;}state.audioHlsPollToken++;state.audioHlsPreparing=false;state.audioHlsActive=false;state.audioHlsOffset=0;state.audioHlsSelectedIndex=-1;state.playerAudioChoice='auto';state.playerOriginalDuration=0;state.hdrFellBack=false;state.current=item;state.episodeSeason=null;state.episodeNumber=null;$('playerTitle').textContent=item.title+(episode&&episode.title?' · '+episode.title:'');$('playerLayer').classList.remove('hidden');showPlayerControls();$('playerError').textContent='Получаем ссылку на видео…';var mediaId=episode&&(episode.media_id||episode.id);(state.capsSync||Promise.resolve()).catch(function(){}).then(function(){return KPApi.play(item.id,mediaId);}).then(function(result){var st=result.selected||((result.streams||[])[0]);if(!st||!st.url)throw new Error('Ссылка на видео не найдена');preparePlayerOptions(result,st);$('playerError').textContent='';var group=currentQualityGroup(),preferred=preferredModeFor(group),initialUrl=streamUrlForGroup(group,preferred)||st.url;state.hdrAttempt=preferred==='direct'&&isHevcGroup(group);state.episodeSeason=(result.media&&result.media.season)||null;state.episodeNumber=(result.media&&result.media.episode)||null;openUrl(initialUrl,preferred,(result.media&&result.media.id)||mediaId||'');}).catch(function(err){$('playerError').textContent='Не удалось получить поток: '+(err&&err.message?err.message:String(err));KPApi.report('Resolve stream failed',{item_id:item.id,error:String(err)},'media').catch(function(){});});}
 function switchStreamMode(mode){if(!mode)return;var group=currentQualityGroup(),url=streamUrlForGroup(group,mode);if(!url){$('playerError').textContent='Для выбранного режима нет ссылки на поток.';return;}if(!state.audioHlsActive&&!state.audioHlsPreparing&&mode===state.mode)return;state.audioHlsPollToken++;state.audioHlsPreparing=false;if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);state.audioHlsPendingJobId='';state.playerAudioChoice='auto';state.pendingAltAudioIndex=-1;state.altAudioUrl='';populateAudioMenu();var resume=currentResume();$('playerError').textContent='Переключаем поток…';openUrl(url,mode,state.episodeId,resume);clearSwitchMessage(resume);}
-function switchQuality(index){var group=state.playerStreams[Number(index)];if(!group)return;state.playerQualityIndex=String(index);var mode=state.audioHlsActive?state.baseStreamMode:state.mode,url=streamUrlForGroup(group,mode);if(!url){$('playerError').textContent='Для этого качества нет подходящего потока.';return;}if(!state.audioHlsActive&&!state.audioHlsPreparing&&url===state.streamUrl)return;state.audioHlsPollToken++;state.audioHlsPreparing=false;if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);state.audioHlsPendingJobId='';state.playerAudioChoice='auto';state.pendingAltAudioIndex=-1;state.altAudioUrl='';populateAudioMenu();var resume=currentResume();$('playerError').textContent='Меняем качество…';openUrl(url,mode,state.episodeId,resume);clearSwitchMessage(resume);}
+function switchQuality(index){var group=state.playerStreams[Number(index)];if(!group)return;state.playerQualityIndex=String(index);
+ // In HLS mode every entry points at the same master playlist, so reloading
+ // it would re-buffer and re-seek for nothing. Move the hls.js level instead:
+ // instant, keeps the position, and is the only thing that actually changes
+ // the rendition being decoded.
+ if(state.mode==='hls'&&state.hls&&state.hls.levels&&state.hls.levels.length&&!state.audioHlsActive&&!state.audioHlsPreparing){
+  var level=hlsLevelForHeight(group.height);
+  if(level>=0){try{state.hls.autoLevelCapping=level;state.hls.currentLevel=level;}catch(e){}$('playerError').textContent='';return;}
+ }
+ var mode=state.audioHlsActive?state.baseStreamMode:state.mode,url=streamUrlForGroup(group,mode);if(!url){$('playerError').textContent='Для этого качества нет подходящего потока.';return;}if(!state.audioHlsActive&&!state.audioHlsPreparing&&url===state.streamUrl)return;state.audioHlsPollToken++;state.audioHlsPreparing=false;if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);state.audioHlsPendingJobId='';state.playerAudioChoice='auto';state.pendingAltAudioIndex=-1;state.altAudioUrl='';populateAudioMenu();var resume=currentResume();$('playerError').textContent='Меняем качество…';openUrl(url,mode,state.episodeId,resume);clearSwitchMessage(resume);}
 function saveProgress(){if(!state.current||state.current.live)return;var savedPosition=Math.max(logicalCurrentTime(),Number(state.playerResumePosition)||0),totalDuration=logicalDuration();var completed=!!(totalDuration&&savedPosition/totalDuration>=.9);if(completed)state.watchedMap[String(state.current.id)]=1;else if(savedPosition>0&&state.watchedMap[String(state.current.id)]===undefined)state.watchedMap[String(state.current.id)]=0;KPApi.saveProgress({media_id:state.current.id,episode_id:state.episodeId||null,position:savedPosition,duration:totalDuration||0,completed:completed,season:state.episodeSeason||null,episode_number:state.episodeNumber||null}).catch(function(){});}
-function closePlayer(){exitFullscreen();saveProgress();$('playerLayer').classList.remove('live');state.audioHlsPollToken++;state.audioHlsPreparing=false;if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);state.audioHlsPendingJobId='';state.audioHlsJobId='';video.pause();state.playerSwitching=false;destroyHls();video.removeAttribute('src');video.load();$('playerLayer').classList.add('hidden');$('playerLayer').classList.remove('controls-hidden');if(playerControlsTimer){clearTimeout(playerControlsTimer);playerControlsTimer=null;}}
+function closePlayer(){exitFullscreen();saveProgress();clearDirectStallWatch();$('playerLayer').classList.remove('live');state.audioHlsPollToken++;state.audioHlsPreparing=false;if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);state.audioHlsPendingJobId='';state.audioHlsJobId='';video.pause();state.playerSwitching=false;destroyHls();video.removeAttribute('src');video.load();$('playerLayer').classList.add('hidden');$('playerLayer').classList.remove('controls-hidden');if(playerControlsTimer){clearTimeout(playerControlsTimer);playerControlsTimer=null;}}
 // video.play() returns a promise that rejects with AbortError whenever the
 // element is paused or reloaded before playback actually begins. That happens
 // on every quality/audio/stream switch and when closing the player, and it is
@@ -808,7 +917,34 @@ function isAbortedPlay(error){var name=error&&error.name||'',message=String(erro
 // seq ties the attempt to the stream switch that started it, so a rejection
 // belonging to a stream we already navigated away from stays silent.
 function startPlayback(seq){var promise=video.play();if(!promise||!promise.catch)return promise;promise.catch(function(error){if(isAbortedPlay(error))return;if(seq!==undefined&&seq!==state.streamSwitchSeq)return;if(error&&error.name==='NotAllowedError'){$('playerError').textContent='Браузер заблокировал автозапуск. Нажмите OK, чтобы начать воспроизведение.';keepPlayerControlsVisible();return;}mediaError(error&&error.message?error.message:String(error));});return promise;}
-function fallbackFromDirect(){if(!state.hdrAttempt||state.mode!=='direct'||state.hdrFellBack)return false;var group=currentQualityGroup(),url=streamUrlForGroup(group,'hls')||streamUrlForGroup(group,'relay');if(!url)return false;state.hdrFellBack=true;state.hdrAttempt=false;var resume=currentResume();$('playerError').textContent='Прямой поток недоступен, переключаемся через сервер…';openUrl(url,group.variants&&group.variants.hls?'hls':'relay',state.episodeId,resume);clearSwitchMessage(resume);KPApi.report('Direct HDR playback failed, relayed instead',{quality:group&&group.quality,codec:group&&group.codec},'media').catch(function(){});return true;}
+// Direct playback of a progressive file can stall silently when it has to
+// start at a resume position rather than at zero: the seek becomes a
+// byte-range request into a multi-GB file that the CDN serves too slowly to
+// ever fill a buffer, and the element just sits at readyState<=1 with
+// nothing buffered. Crucially it never fires `error`, so the error-driven
+// fallback below never runs and "Продолжить" simply hangs forever.
+// Verified live on a 2160p HEVC title: plays fine from 00:00 in direct mode
+// (readyState 4, buffer filling), dead at readyState 1 with 0 buffered when
+// resumed at 31:11, still dead 27s later.
+// Only a completely empty buffer counts - a slow-but-alive 4K start buffers
+// *something* well before this fires.
+var DIRECT_STALL_MS=12000,directStallTimer=null;
+function clearDirectStallWatch(){if(directStallTimer){clearTimeout(directStallTimer);directStallTimer=null;}}
+function watchDirectStall(seq){
+ clearDirectStallWatch();
+ if(state.mode!=='direct')return;
+ directStallTimer=setTimeout(function(){
+  directStallTimer=null;
+  if(seq!==state.streamSwitchSeq||state.mode!=='direct')return;
+  if(video.readyState>=3||(video.buffered&&video.buffered.length))return;
+  KPApi.report('Direct playback stalled with an empty buffer',{position:Math.round(state.playerResumePosition||0),url:state.streamUrl},'media').catch(function(){});
+  fallbackFromDirect();
+ },DIRECT_STALL_MS);
+}
+// Not gated on `hdrAttempt` any more: a direct stream that will not start is
+// worth relaying whatever the reason it was chosen, and the single-shot
+// `hdrFellBack` guard is what actually prevents a loop.
+function fallbackFromDirect(){if(state.mode!=='direct'||state.hdrFellBack)return false;var group=currentQualityGroup(),url=streamUrlForGroup(group,'hls')||streamUrlForGroup(group,'relay');if(!url)return false;state.hdrFellBack=true;state.hdrAttempt=false;var resume=currentResume();$('playerError').textContent='Прямой поток недоступен, переключаемся через сервер…';openUrl(url,group.variants&&group.variants.hls?'hls':'relay',state.episodeId,resume);clearSwitchMessage(resume);KPApi.report('Direct HDR playback failed, relayed instead',{quality:group&&group.quality,codec:group&&group.codec},'media').catch(function(){});return true;}
 function mediaError(m){if(fallbackFromDirect())return;var failedPosition=Math.max(logicalCurrentTime(),Number(state.playerResumePosition)||0);if(failedPosition>0)state.playerResumePosition=failedPosition;state.playerSwitching=false;$('playerError').textContent=m+(state.playerResumePosition>0?' Позиция '+fmt(state.playerResumePosition)+' сохранена.':'');KPApi.report('Media error',{message:m,mode:state.mode,url:state.streamUrl,error:video.error&&video.error.code},'media').catch(function(){});}
 function subscriptionDate(ts){if(!ts)return '';try{return new Date(Number(ts)*1000).toLocaleDateString('ru-RU',{day:'2-digit',month:'long',year:'numeric'});}catch(e){return '';}}
 function subscriptionLabel(sub){var days=Number(sub&&sub.days);if(!sub||sub.expired||sub.active===false)return 'PRO истёк';if(!isFinite(days))return 'PRO';if(days<1)return Math.max(1,Math.ceil(days*24))+' ч.';return Math.max(1,Math.ceil(days))+' дн.';}
@@ -821,7 +957,13 @@ function ensureSubscriptionForPlayback(){var sub=state.profile&&state.profile.su
 function setAuthLocked(locked){state.authRequired=!!locked;document.body.classList.toggle('auth-locked',!!locked);$('authClose').classList.toggle('hidden',!!locked);}
 function showAuthGate(){clearAuth();setAuthLocked(true);$('authModal').classList.remove('hidden');$('authIntro').classList.remove('hidden');$('authStart').classList.remove('hidden');$('authStart').disabled=false;$('authCodePanel').classList.add('hidden');$('authRestart').classList.add('hidden');$('verificationUri').textContent='';$('userCode').textContent='------';$('authCountdown').textContent='';$('authStatus').textContent='';setTimeout(function(){$('authStart').focus();},20);}
 function loadWatchedStatuses(){return Promise.all([KPApi.watchingStatuses().catch(function(){return {statuses:{}};}),KPApi.history().catch(function(){return {items:[]};})]).then(function(results){var remote=(results[0]&&results[0].statuses)||{},local=(results[1]&&results[1].items)||[];state.watchedMap={};for(var id in remote)if(remote.hasOwnProperty(id))state.watchedMap[String(id)]=parseInt(remote[id],10);for(var i=0;i<local.length;i++){var row=local[i],mid=String(row.media_id||'');if(!mid)continue;if(row.completed)state.watchedMap[mid]=1;else if(state.watchedMap[mid]===undefined)state.watchedMap[mid]=0;}if(state.appInitialized&&state.route!=='settings')renderCatalog();return state.watchedMap;});}
-function initializeAuthenticatedApp(){state.authenticated=true;setAuthLocked(false);$('authModal').classList.add('hidden');if(!state.appInitialized){state.appInitialized=true;applyHash();loadSettings();}else if(state.sessionExpired){state.sessionExpired=false;var scr=visibleScreen();if(scr==='detailsScreen'&&state.current)openDetails(state.current);else if(scr==='searchScreen')doSearch(state.searchMode);else renderCatalog();}loadProfile(true);loadWatchedStatuses();}
+function initializeAuthenticatedApp(){state.authenticated=true;setAuthLocked(false);$('authModal').classList.add('hidden');
+ // Must happen before the first /play: KinoPub picks which files to offer
+ // per title from these flags, so reporting them late means the first
+ // playback of a session gets the previous device profile's file list.
+ // play() waits on this promise, which is normally long resolved by then.
+ state.capsSync=syncDeviceCapabilities();
+ if(!state.appInitialized){state.appInitialized=true;applyHash();loadSettings();}else if(state.sessionExpired){state.sessionExpired=false;var scr=visibleScreen();if(scr==='detailsScreen'&&state.current)openDetails(state.current);else if(scr==='searchScreen')doSearch(state.searchMode);else renderCatalog();}loadProfile(true);loadWatchedStatuses();}
 // A 401 from any authenticated call means the session died mid-use (cookie
 // gone, or KinoPub's refresh token was revoked server-side) - show the exact
 // same gate as a first-time visitor instead of leaving whatever error text
@@ -897,7 +1039,7 @@ function updatePlayerProgress(){var current=logicalCurrentTime(),duration=logica
 $('playerLayer').onclick=function(e){if(e.target.closest&&e.target.closest('.player-controls, .timeline, .player-close-x'))return;if(fullscreenElement()===video)return;toggleVideoPlayback();showPlayerControls();};
 $('timeline').onclick=function(e){e.stopPropagation();seekFromTimelineEvent(e);};
 $('timeline').onkeydown=function(e){if(e.keyCode===37||e.keyCode===39){e.preventDefault();e.stopPropagation();var step=Math.max(5,(logicalDuration()||0)*0.01);seekLogical(logicalCurrentTime()+(e.keyCode===37?-step:step));}};
-$('togglePlay').onclick=function(e){e.stopPropagation();toggleVideoPlayback(false);showPlayerControls();};$('rewind').onclick=function(){seekLogical(logicalCurrentTime()-10);showPlayerControls();};$('forward').onclick=function(){seekLogical(logicalCurrentTime()+10);showPlayerControls();};$('nativeFullscreen').onclick=function(e){e.stopPropagation();toggleNativeFullscreen();showPlayerControls();};$('playerStreamMode').onchange=function(e){e.stopPropagation();switchStreamMode(this.value);showPlayerControls();};$('playerQuality').onchange=function(e){e.stopPropagation();switchQuality(this.value);showPlayerControls();};$('playerSubtitles').onchange=function(e){e.stopPropagation();applySubtitleChoice(this.value);showPlayerControls();};$('playerSubtitleSize').onchange=function(e){e.stopPropagation();var size=applySubtitleSize(this.value);showPlayerControls();var next={};for(var k in state.settings)if(state.settings.hasOwnProperty(k))next[k]=state.settings[k];next.subtitle_size=size;KPApi.saveSettings(next).catch(function(){});};$('playerAudio').onchange=function(e){e.stopPropagation();applyAudioChoice(this.value);showPlayerControls();};$('closePlayer').onclick=closePlayer;$('playerCloseX').onclick=function(e){e.stopPropagation();closePlayer();};$('playerLayer').onmousemove=showPlayerControls;$('playerLayer').onmouseenter=showPlayerControls;function refreshNativeTracks(){populateAudioMenu();populateSubtitleMenu();reapplyAudioSelection();applySubtitleChoice(state.playerSubtitleChoice);}video.addEventListener('loadedmetadata',refreshNativeTracks);video.addEventListener('loadeddata',refreshNativeTracks);video.addEventListener('canplay',refreshNativeTracks);if(video.audioTracks){video.audioTracks.onaddtrack=refreshNativeTracks;video.audioTracks.onchange=function(){populateAudioMenu();};}if(video.textTracks){video.textTracks.onaddtrack=refreshNativeTracks;video.textTracks.onchange=function(){populateSubtitleMenu();};}video.addEventListener('play',showPlayerControls);video.addEventListener('pause',keepPlayerControlsVisible);video.addEventListener('ended',keepPlayerControlsVisible);
+$('togglePlay').onclick=function(e){e.stopPropagation();toggleVideoPlayback(false);showPlayerControls();};$('rewind').onclick=function(){seekLogical(logicalCurrentTime()-10);showPlayerControls();};$('forward').onclick=function(){seekLogical(logicalCurrentTime()+10);showPlayerControls();};$('nativeFullscreen').onclick=function(e){e.stopPropagation();toggleNativeFullscreen();showPlayerControls();};$('playerStreamMode').onchange=function(e){e.stopPropagation();switchStreamMode(this.value);showPlayerControls();};$('playerQuality').onchange=function(e){e.stopPropagation();switchQuality(this.value);showPlayerControls();};$('playerSubtitles').onchange=function(e){e.stopPropagation();applySubtitleChoice(this.value);showPlayerControls();};$('playerSubtitleSize').onchange=function(e){e.stopPropagation();var size=applySubtitleSize(this.value);showPlayerControls();var next={};for(var k in state.settings)if(state.settings.hasOwnProperty(k))next[k]=state.settings[k];next.subtitle_size=size;KPApi.saveSettings(next).catch(function(){});};$('playerAudio').onchange=function(e){e.stopPropagation();applyAudioChoice(this.value);showPlayerControls();};$('closePlayer').onclick=closePlayer;$('playerCloseX').onclick=function(e){e.stopPropagation();closePlayer();};$('playerLayer').onmousemove=showPlayerControls;$('playerLayer').onmouseenter=showPlayerControls;function refreshNativeTracks(){populateAudioMenu();populateSubtitleMenu();reapplyAudioSelection();applySubtitleChoice(state.playerSubtitleChoice);}video.addEventListener('loadedmetadata',refreshNativeTracks);video.addEventListener('loadeddata',refreshNativeTracks);video.addEventListener('canplay',refreshNativeTracks);if(video.audioTracks){video.audioTracks.onaddtrack=refreshNativeTracks;video.audioTracks.onchange=function(){populateAudioMenu();};}if(video.textTracks){video.textTracks.onaddtrack=refreshNativeTracks;video.textTracks.onchange=function(){populateSubtitleMenu();};}video.addEventListener('play',showPlayerControls);video.addEventListener('pause',keepPlayerControlsVisible);video.addEventListener('ended',keepPlayerControlsVisible);video.addEventListener('playing',clearDirectStallWatch);
 document.addEventListener('fullscreenchange',function(){keepPlayerControlsVisible();updateFullscreenButton();});document.addEventListener('webkitfullscreenchange',function(){keepPlayerControlsVisible();updateFullscreenButton();});
 if(typeof window!=='undefined'&&window.addEventListener)window.addEventListener('hashchange',applyHash);
 // The sidebar has its own overflow:auto (its nav list can outgrow the
