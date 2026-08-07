@@ -18,6 +18,10 @@ function makeEl(id) {
 }
 const els={}, $$=id=>(els[id]||(els[id]=makeEl(id)));
 const video=$$('video');
+const videoListeners={};
+video.addEventListener=(type,fn)=>{(videoListeners[type]=videoListeners[type]||[]).push(fn);};
+video.removeEventListener=(type,fn)=>{const l=videoListeners[type];if(!l)return;const i=l.indexOf(fn);if(i>=0)l.splice(i,1);};
+video.__fire=(type)=>{(videoListeners[type]||[]).slice().forEach(fn=>fn());};
 Object.assign(video,{paused:false,ended:false,currentTime:0,duration:7200,readyState:2,error:null,
   textTracks:[],audioTracks:[],seekable:{length:1,start:()=>0,end:()=>7200},
   pause(){this.paused=true;},play(){this.paused=false;return Promise.resolve();},
@@ -178,6 +182,24 @@ st.streamSwitchSeq++;               // user switched quality/stream meanwhile
 app.runTimers();
 check('a superseded stream is not yanked out from under the new one', st.mode, 'direct');
 video.readyState=2; video.buffered={length:1,start:()=>0,end:()=>7200};
+
+// The regression this section exists for: a real 4K/HDR file on a real TV's
+// real network can easily take longer than one grace window to produce its
+// first buffered range while working perfectly fine - the first version of
+// this watchdog used one fixed deadline with no way to tell that apart from
+// "stuck", and yanked a healthy-but-slow direct/HDR-capable stream over to
+// relay (which drops HDR on webOS) for nothing. `progress` events are the
+// signal that distinguishes them.
+console.log('--- slow but alive: `progress` events buy more time instead of forcing relay ---');
+stallSetup();
+app.watchStall(st.streamSwitchSeq);
+video.__fire('progress');           // a byte arrived - still not enough to play, but not stuck either
+app.runTimers();                    // first deadline: sees progress, extends patience instead of relaying
+check('progress before the deadline keeps it on direct', st.mode, 'direct');
+check('a second grace window was armed', pending.length, 1);
+app.runTimers();                    // second deadline, no further progress this time: genuinely stuck now
+check('no progress in the second window relays after all', st.mode !== 'direct', true);
+
 global.setTimeout=realSetTimeout; global.clearTimeout=realClearTimeout;
 
 // Every KinoPub HLS "quality" link is the same master listing all

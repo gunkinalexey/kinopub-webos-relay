@@ -1106,20 +1106,44 @@ function startPlayback(seq){var promise=video.play();if(!promise||!promise.catch
 // Verified live on a 2160p HEVC title: plays fine from 00:00 in direct mode
 // (readyState 4, buffer filling), dead at readyState 1 with 0 buffered when
 // resumed at 31:11, still dead 27s later.
-// Only a completely empty buffer counts - a slow-but-alive 4K start buffers
-// *something* well before this fires.
-var DIRECT_STALL_MS=12000,directStallTimer=null;
-function clearDirectStallWatch(){if(directStallTimer){clearTimeout(directStallTimer);directStallTimer=null;}}
+//
+// The first version of this watchdog used one fixed 12s deadline with no
+// way to tell "stuck" from "slow" apart, and that turned out to be a real
+// regression: a large 4K HDR file on a real TV's actual network can easily
+// take longer than 12s to produce its first buffered range while still
+// working fine, and this was yanking it over to relay/hls - which drops
+// HDR (MSE commonly tone-maps it away on webOS, see the note above
+// preferredModeFor) - for a stream that was never actually broken, just
+// slower than the sandbox this was first verified in. Now it watches the
+// element's own `progress` events: any progress at all resets the grace
+// window instead of ending it, so a slow-but-alive download keeps getting
+// more time indefinitely, while the original bug (a resumed byte-range
+// request that never receives a single byte) still times out on schedule -
+// zero progress events ever fire for that case. `DIRECT_STALL_MAX_MS` is
+// only a last-resort ceiling against a pathological trickle of progress
+// events that never amounts to a usable buffer.
+var DIRECT_STALL_MS=12000,DIRECT_STALL_MAX_MS=60000,directStallTimer=null,directStallProgress=false,directStallStartedAt=0;
+function onDirectStallProgress(){directStallProgress=true;}
+function clearDirectStallWatch(){if(directStallTimer){clearTimeout(directStallTimer);directStallTimer=null;}video.removeEventListener('progress',onDirectStallProgress);}
+function checkDirectStall(seq){
+ directStallTimer=null;
+ if(seq!==state.streamSwitchSeq||state.mode!=='direct')return;
+ if(video.readyState>=3||(video.buffered&&video.buffered.length)){clearDirectStallWatch();return;}
+ if(directStallProgress&&Date.now()-directStallStartedAt<DIRECT_STALL_MAX_MS){
+  directStallProgress=false;
+  directStallTimer=setTimeout(function(){checkDirectStall(seq);},DIRECT_STALL_MS);
+  return;
+ }
+ clearDirectStallWatch();
+ KPApi.report('Direct playback stalled with an empty buffer',{position:Math.round(state.playerResumePosition||0),url:state.streamUrl,sawProgress:directStallProgress},'media').catch(function(){});
+ fallbackFromDirect();
+}
 function watchDirectStall(seq){
  clearDirectStallWatch();
  if(state.mode!=='direct')return;
- directStallTimer=setTimeout(function(){
-  directStallTimer=null;
-  if(seq!==state.streamSwitchSeq||state.mode!=='direct')return;
-  if(video.readyState>=3||(video.buffered&&video.buffered.length))return;
-  KPApi.report('Direct playback stalled with an empty buffer',{position:Math.round(state.playerResumePosition||0),url:state.streamUrl},'media').catch(function(){});
-  fallbackFromDirect();
- },DIRECT_STALL_MS);
+ directStallProgress=false;directStallStartedAt=Date.now();
+ video.addEventListener('progress',onDirectStallProgress);
+ directStallTimer=setTimeout(function(){checkDirectStall(seq);},DIRECT_STALL_MS);
 }
 // Not gated on `hdrAttempt` any more: a direct stream that will not start is
 // worth relaying whatever the reason it was chosen, and the single-shot
