@@ -218,6 +218,34 @@ New from this session:
   `GET /catalog/tv` (real `v1/tv`, all 51 channels for this account are
   sport) rendered as a channel-logo grid, playback via the existing `/hls`
   relay. See README.md v0.9.90 / backend 0.9.83.
+- **"Новые эпизоды" (sidebar button still dead, no `data-route`) —
+  deliberately deferred, not blocked on guessing.** kino.watch's own page
+  (`/media/new-serial-episodes?type=serial|docuserial|tvshow`, saved in
+  `examples/ex3/`) is a per-episode table (Сериал / Название серии / Эпизод
+  `s40e14` / Добавлен `<date>`), 522 pages deep, and clearly **catalogue-wide**
+  (shows titles like "90 Day Fiancé" no realistic account tracks) - a
+  different concept from `v1/watching/serials` (already used for "Я смотрю",
+  scoped to what *this account* follows). Fetched kinoapi.com's **complete**
+  page index (all 14 doc pages: video content, TV, devices, bookmarks,
+  watching, collections, history, user, references...) - **no page documents
+  a catalogue-wide new-episodes feed.** `v1/items`'s `sort` only takes
+  `id/year/title/created/updated/rating/views/watchers`, nothing
+  episode-shaped. Tried ~15 plausible endpoint-name guesses live via
+  `/bridge/explorer` (`v1/media/new-serial-episodes`, `v1/serials/episodes`,
+  `v1/items/fresh/episodes`, etc.) - all 404. Direct navigation to
+  `kino.watch` was denied once, then worked on retry - loaded the real page
+  live (an existing session was already active) and checked its network
+  requests: **the page is fully server-rendered, zero XHR to
+  `api.service-kp.com`** on load, only static assets. So the DevTools method
+  that resolved marktime/toggle **will not work here either** - there is no
+  client-visible API call to sniff, the list is built entirely on
+  kino.watch's own backend before the HTML reaches the browser.
+  **Asked the user; they chose to defer rather than have me guess further or
+  build the `v1/watching/serials`-based approximation.** If picked back up,
+  the only honest options left are: (a) find an undocumented endpoint some
+  other way (it's not in the 14-page public API docs), or (b) build the
+  `v1/watching/serials`-based approximation instead of an exact clone and
+  say so plainly in the UI.
 
 ## Testing infrastructure
 
