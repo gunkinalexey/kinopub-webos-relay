@@ -153,40 +153,62 @@ const click = el => el.dispatchEvent(new window.MouseEvent('click', { bubbles: t
   check('quality options are the reference ids (4=4K), not raw resolutions',
     qa('#filterQuality option').map(o => o.value), ['','1','2','3','4']);
   check('sort has real v1/items field names', qa('#filterSort option').map(o => o.value)[1], '-created');
+  check('year is a from/to range, not a single exact match',
+    [!!document.getElementById('filterYearFrom'), !!document.getElementById('filterYearTo')], [true,true]);
+  check('"Период" offers the real conditions[]=created>= presets',
+    qa('#filterAdded option').map(o => o.value), ['','7','30','365']);
 
   console.log('--- picking a filter actually refetches with it ---');
   calls.length = 0;
-  const yearSelect = document.getElementById('filterYear');
-  yearSelect.value = '2020';
-  yearSelect.dispatchEvent(new window.Event('change'));
+  const yearFrom = document.getElementById('filterYearFrom');
+  yearFrom.value = '2020';
+  yearFrom.dispatchEvent(new window.Event('change'));
   await settle();
   check('re-fetched the section', calls[0][0], 'catalog');
-  check('with the chosen year', lastCatalogFilters.year, '2020');
+  check('with the chosen year', lastCatalogFilters.year_from, '2020');
   check('toggle button shows an active-filter count', document.getElementById('filterToggle').textContent, 'Фильтры (1) ▾');
   check('panel stays open across the re-render', !!document.getElementById('filterPanel'), true);
-  check('and keeps the chosen value', document.getElementById('filterYear').value, '2020');
+  check('and keeps the chosen value', document.getElementById('filterYearFrom').value, '2020');
 
   console.log('--- resetting clears every filter in one click ---');
   click(document.getElementById('filterReset')); await settle();
   check('button label drops the count', document.getElementById('filterToggle').textContent, 'Фильтры ▾');
-  check('select goes back to "any"', document.getElementById('filterYear').value, '');
+  check('select goes back to "any"', document.getElementById('filterYearFrom').value, '');
 
   console.log('--- switching sections keeps its own filter set separate ---');
   // The panel is still open from the earlier click (state.filterPanelOpen
   // is a single global flag, not per-section) - renderTop() re-shows it on
   // every route change, so no extra click needed here.
-  document.getElementById('filterYear').value = '2015';
-  document.getElementById('filterYear').dispatchEvent(new window.Event('change'));
+  document.getElementById('filterYearFrom').value = '2015';
+  document.getElementById('filterYearFrom').dispatchEvent(new window.Event('change'));
   await settle();
   app.route('serial'); await settle();
   check('a fresh section starts with no active filters',
     document.querySelector('#catalogTop .filter-toggle').textContent, 'Фильтры ▾');
   app.route('movie'); await settle();
   check('coming back to movies remembers its own filter',
-    document.getElementById('filterYear').value, '2015');
+    document.getElementById('filterYearFrom').value, '2015');
   click(document.getElementById('filterReset')); await settle();
   click(document.getElementById('filterToggle')); await settle();
   check('panel now closed', !!document.getElementById('filterPanel'), false);
+
+  console.log('--- Аниме: no genre picker, it would silently break the section ---');
+  // "Аниме" is itself `genre=25` under the hood (see CATALOG_SECTIONS in
+  // main.py), and v1/items only accepts one genre value - offering a
+  // second genre choice here would silently replace "anime" with whatever
+  // was picked. Confirmed live before this test existed: filtering Anime
+  // by "Комедия" returned ordinary comedies, not anime comedies.
+  calls.length = 0;
+  app.route('anime'); await settle();
+  click(document.getElementById('filterToggle')); await settle();
+  check('genre select is not offered on this section', !!document.getElementById('filterGenre'), false);
+  check('never asked KPApi.genres for it', calls.some(c => c[0] === 'genres'), false);
+  check('country/year/quality/sort are still offered', !!document.getElementById('filterCountry'), true);
+  click(document.getElementById('filterToggle')); await settle();
+  app.route('movie'); await settle();
+  click(document.getElementById('filterToggle')); await settle();
+  check('genre select is back for a section that supports it', !!document.getElementById('filterGenre'), true);
+  click(document.getElementById('filterToggle')); await settle();
 
   console.log('--- "Закладки": real folders, not a dead sidebar link ---');
   check('sidebar link is wired', !!document.querySelector('[data-route="bookmarks"]'), true);

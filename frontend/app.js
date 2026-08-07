@@ -118,6 +118,16 @@ function setFilter(cfg,name,value){
 }
 function resetFilters(cfg){state.catalogFilters[filterStorageKey(cfg)]={};renderCatalog();}
 function filterYearOptions(){var y=new Date().getFullYear()+1,out=[['','Любой']];for(var year=y;year>=1930;year--)out.push([String(year),String(year)]);return out;}
+// Real range filtering, not a single exact-year match: `v1/items` documents
+// `conditions` with exactly one example ("year <= 100") and no encoding
+// shown, but no other endpoint-parity is claimed here - just what was
+// actually confirmed live via /bridge/explorer before writing this:
+// repeated `conditions[]=year>=1990&conditions[]=year<=2000` really does
+// AND together and really filters (dropped a ~7900-item list to ~12 for
+// `year<=1950`). Two plain <select> instead of kino.watch's drag slider -
+// there's no pointer on a TV remote, and every other control in this panel
+// is already a <select> for the same reason.
+var FILTER_ADDED=[['','За всё время'],['7','За неделю'],['30','За месяц'],['365','За год']];
 function fillSelect(select,options,selected){select.innerHTML='';for(var i=0;i<options.length;i++){var o=document.createElement('option');o.value=options[i][0];o.textContent=options[i][1];if(options[i][0]===selected)o.selected=true;select.appendChild(o);}}
 function loadFilterGenres(type){
  if(state.filterGenres[type])return Promise.resolve(state.filterGenres[type]);
@@ -127,27 +137,46 @@ function loadFilterCountries(){
  if(state.filterCountries)return Promise.resolve(state.filterCountries);
  return KPApi.countries().then(function(data){state.filterCountries=(data&&data.countries)||[];return state.filterCountries;}).catch(function(){return [];});
 }
+// "Аниме" is itself a genre selector under the hood (genre=25 - it's not
+// a real content `type`, see CATALOG_SECTIONS in main.py), and v1/items
+// only accepts one `genre` value. Offering a second genre pick here would
+// silently replace "anime" with whatever the user chose - confirmed live
+// (backend/app/main.py has the matching guard): filtering Anime by
+// "Комедия" returned ordinary comedies, not anime comedies, because
+// there's no documented way to AND two genres together on this endpoint.
+// Hiding the control here is the honest fix, not a cosmetic one - the
+// backend guard alone would leave a dropdown that looks like it works but
+// silently does nothing.
+function sectionOffersGenreFilter(cfg){return cfg.section!=='anime';}
 function renderFilterPanel(cfg){
  var old=$('filterPanel');if(old)old.parentNode.removeChild(old);
  if(!state.filterPanelOpen)return;
  var filters=currentFilters(cfg),panel=document.createElement('div');
+ var showGenre=sectionOffersGenreFilter(cfg);
  panel.id='filterPanel';panel.className='filter-panel';
  panel.innerHTML=
-  '<label>Жанр<select id="filterGenre" class="focusable"><option>Загрузка…</option></select></label>'+
+  (showGenre?'<label>Жанр<select id="filterGenre" class="focusable"><option>Загрузка…</option></select></label>':'')+
   '<label>Страна<select id="filterCountry" class="focusable"><option>Загрузка…</option></select></label>'+
-  '<label>Год<select id="filterYear" class="focusable"></select></label>'+
+  '<label>Год от<select id="filterYearFrom" class="focusable"></select></label>'+
+  '<label>Год до<select id="filterYearTo" class="focusable"></select></label>'+
+  '<label>Период<select id="filterAdded" class="focusable"></select></label>'+
   '<label>Качество<select id="filterQuality" class="focusable"></select></label>'+
   '<label>Сортировка<select id="filterSort" class="focusable"></select></label>'+
   '<label>&nbsp;<button id="filterReset" class="focusable secondary">Сбросить</button></label>';
  $('catalogTop').appendChild(panel);
- fillSelect($('filterYear'),filterYearOptions(),filters.year||'');
+ var yearOptions=filterYearOptions();
+ fillSelect($('filterYearFrom'),yearOptions,filters.year_from||'');
+ fillSelect($('filterYearTo'),yearOptions,filters.year_to||'');
+ fillSelect($('filterAdded'),FILTER_ADDED,filters.added_days||'');
  fillSelect($('filterQuality'),FILTER_QUALITIES,filters.quality||'');
  fillSelect($('filterSort'),FILTER_SORTS,filters.sort||'');
- $('filterYear').onchange=function(){setFilter(cfg,'year',this.value);};
+ $('filterYearFrom').onchange=function(){setFilter(cfg,'year_from',this.value);};
+ $('filterYearTo').onchange=function(){setFilter(cfg,'year_to',this.value);};
+ $('filterAdded').onchange=function(){setFilter(cfg,'added_days',this.value);};
  $('filterQuality').onchange=function(){setFilter(cfg,'quality',this.value);};
  $('filterSort').onchange=function(){setFilter(cfg,'sort',this.value);};
  $('filterReset').onclick=function(){resetFilters(cfg);};
- loadFilterGenres(sectionGenreType(cfg)).then(function(list){
+ if(showGenre)loadFilterGenres(sectionGenreType(cfg)).then(function(list){
   var select=$('filterGenre');if(!select)return;
   fillSelect(select,[['','Любой']].concat(list.map(function(g){return [String(g.id),g.title];})),filters.genre||'');
   select.onchange=function(){setFilter(cfg,'genre',this.value);};
@@ -177,7 +206,7 @@ function catalogPerPage(){var cols=gridColumns();if(!cols)return state.catalogPe
 // changing a filter naturally lands on an unseen key, which means page 0,
 // no stale cache, and no known total-pages count - exactly the reset a
 // filter change should cause, for free.
-function catalogFilterSignature(cfg){var f=currentFilters(cfg),parts=[];['genre','country','year','quality','sort'].forEach(function(k){if(f[k])parts.push(k+'='+f[k]);});return parts.length?'?'+parts.join('&'):'';}
+function catalogFilterSignature(cfg){var f=currentFilters(cfg),parts=[];['genre','country','year_from','year_to','added_days','quality','sort'].forEach(function(k){if(f[k])parts.push(k+'='+f[k]);});return parts.length?'?'+parts.join('&'):'';}
 function catalogPageKey(cfg){
  if(cfg.mode==='history')return 'history:'+(state.historyType||'all');
  if(cfg.mode==='bookmarks')return 'bookmarks:'+(state.bookmarkFolder||'list');

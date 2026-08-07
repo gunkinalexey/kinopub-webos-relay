@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.86', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.88', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -796,7 +796,8 @@ CATALOG_FEEDS = {
 @app.get('/catalog/list')
 async def catalog_list(
     section: str = 'movie', feed: str = 'fresh', page: int = 0, perpage: int = 48,
-    genre: Optional[int] = None, country: Optional[int] = None, year: Optional[int] = None,
+    genre: Optional[int] = None, country: Optional[int] = None,
+    year_from: Optional[int] = None, year_to: Optional[int] = None, added_days: Optional[int] = None,
     quality: Optional[int] = None, sort: Optional[str] = None,
     kp_session: Optional[str] = Cookie(default=None),
 ) -> Dict[str, Any]:
@@ -806,13 +807,29 @@ async def catalog_list(
     rather than being approximated by filtering a mixed movie/serial payload.
 
     The optional filters mirror real, verified `v1/items` parameters - not
-    guessed. Two things are non-obvious and were checked live before
-    shipping: `quality` is the small **reference id** from
-    `v1/references/video-quality` (1=480p..4=4K), not the raw resolution -
-    `quality=2160` silently returns zero results, `quality=4` returns the
-    same 2160p titles. `sort` takes a bare field name
-    (id/year/title/created/updated/rating/views/watchers), `-field` for
-    descending.
+    guessed. Three things are non-obvious and were checked live before
+    shipping:
+
+    - `quality` is the small **reference id** from
+      `v1/references/video-quality` (1=480p..4=4K), not the raw resolution -
+      `quality=2160` silently returns zero results, `quality=4` returns the
+      same 2160p titles.
+    - `sort` takes a bare field name
+      (id/year/title/created/updated/rating/views/watchers), `-field` for
+      descending.
+    - Year/date-added ranges go through `conditions[]=<field><op><value>`
+      (e.g. `conditions[]=year>=1990`), documented only as a one-line example
+      ("year <= 100") with no query-string encoding shown. Confirmed live
+      that repeated `conditions[]` params really do AND together and really
+      do filter (`year<=1950` dropped a ~7900-item type=serial list to ~12).
+      Also confirmed live that the documented `finished` (0/1, "статус
+      сериала") param does **nothing** at all - identical item count with
+      and without it - so it is deliberately not exposed here; the filter
+      panel has no "Статус" control for the same reason. Same story for
+      rating ranges/age rating/language/translation/voice studio, all
+      visible on kino.watch's own filter panel: none of them exist as
+      `v1/items` parameters at all, documented or otherwise, so faking a
+      control for them was rejected rather than shipped non-functional.
     """
     section = section.strip().lower()
     feed = feed.strip().lower()
@@ -820,16 +837,33 @@ async def catalog_list(
     endpoint = CATALOG_FEEDS.get(feed)
     if not selector:
         raise HTTPException(400, f'Unknown catalogue section: {section}')
-    if genre is not None:
+    # "Аниме" *is* a genre selector under the hood (genre=25, see
+    # CATALOG_SECTIONS) rather than a real `type`. `v1/items` only accepts
+    # one `genre` value, so blindly overwriting it with the filter panel's
+    # own genre choice silently dropped the anime constraint entirely -
+    # confirmed live: filtering Anime by "Комедия" returned 13319 ordinary
+    # comedies (Незнайка на Луне etc.), not the ~1730 titles actually
+    # tagged Аниме. There's no documented way to AND two genres together on
+    # this endpoint, so the section's own genre wins; the filter panel also
+    # hides its Genre dropdown on this section so this is defense in depth,
+    # not the only guard.
+    if genre is not None and 'genre' not in selector:
         selector['genre'] = genre
     if country is not None:
         selector['country'] = country
-    if year is not None:
-        selector['year'] = year
     if quality is not None:
         selector['quality'] = quality
     if sort:
         selector['sort'] = sort
+    conditions: List[str] = []
+    if year_from is not None:
+        conditions.append(f'year>={year_from}')
+    if year_to is not None:
+        conditions.append(f'year<={year_to}')
+    if added_days is not None and added_days > 0:
+        conditions.append(f'created>={int(time.time()) - added_days * 86400}')
+    if conditions:
+        selector['conditions[]'] = conditions
     if not endpoint:
         raise HTTPException(400, f'Unknown catalogue feed: {feed}')
     # The UI uses zero-based indexes internally, while KinoPub's catalogue
