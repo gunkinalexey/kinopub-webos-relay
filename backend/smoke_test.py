@@ -85,6 +85,18 @@ with TestClient(app, raise_server_exceptions=False) as client:
           (partial.hevc, partial.uhd, partial.hdr) == (None, None, True),
           f'{partial!r}')
 
+    # The filter panel's sliders are useless if the query params silently are
+    # not wired up - a typo here would just be ignored by FastAPI and the
+    # catalogue would come back unfiltered, which looks like a working
+    # control that does nothing. The schema is the cheap way to catch it
+    # without an upstream call.
+    schema = client.get('/openapi.json').json()
+    params = {p['name'] for p in schema['paths']['/catalog/list']['get']['parameters']}
+    check('/catalog/list takes the rating-range params',
+          {'imdb_from', 'imdb_to', 'kp_from', 'kp_to'} <= params,
+          sorted(params))
+    check('/catalog/list still takes the year range', {'year_from', 'year_to'} <= params, sorted(params))
+
     r = client.get('/history')
     check('GET /history (local progress)', r.status_code == 200, f'HTTP {r.status_code} {r.text[:120]}')
 

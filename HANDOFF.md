@@ -69,7 +69,7 @@ read-only — **frontend changes are live immediately, no rebuild**.
 
 Backend version string lives at `app = FastAPI(..., version='0.9.NN', ...)`
 in `main.py` near the top; bump it whenever `backend/` changes so `/health`
-reflects what's actually deployed. **Currently: backend 0.9.89.**
+reflects what's actually deployed. **Currently: backend 0.9.90.**
 
 The real upstream API is `https://api.service-kp.com` (`API_BASE`). Docs at
 kinoapi.com are patchy and the domain is **intermittently unreachable via
@@ -86,13 +86,13 @@ inside the backend container instead (see "Verifying live" below).
 ## Current state
 
 - Branch: `rework/audio-subtitles-details` (not merged to `main`)
-- Backend running version: **0.9.89**, containers up via `docker compose up -d`
+- Backend running version: **0.9.90**, containers up via `docker compose up -d`
 - `curl http://localhost:8080/bridge/health` to check it's alive
 - Working tree has uncommitted changes at handoff time — the auto-commit
   hook (see below) picks them up at the end of the current turn if this
   handoff is being read mid-session; if you're starting fresh, they're
   probably already committed.
-- **233 frontend checks + 21 backend smoke checks, all green** (see Testing
+- **252 frontend checks + 24 backend smoke checks, all green** (see Testing
   below)
 
 ## How work has been happening (read this before doing anything)
@@ -140,8 +140,12 @@ first** (via `/bridge/explorer` or a live browser check), find the actual
 mechanism, *then* explain and fix — not guess-and-patch. Every fix in this
 session was verified against the real account/API before being called done,
 and every "this can't be done honestly" conclusion (finished status filter,
-rating-range filter, "Новые эпизоды") was reached by testing live and
-finding it genuinely doesn't work, not by assumption.
+"Новые эпизоды") was reached by testing live and finding it genuinely
+doesn't work, not by assumption. One of those conclusions - the
+rating-range filter - was later found to be **wrong**: `conditions[]`
+does accept `imdb_rating`/`kinopoisk_rating`, it just was not tried under
+those names. Worth remembering as the failure mode of this method: "I
+tested and it doesn't work" is only as good as the field names tried.
 
 **Real endpoints are never guessed into existence.** When kino.watch's own
 site shows some feature, the instinct is to guess a matching `v1/...` path —
@@ -152,17 +156,26 @@ before writing code against a guessed shape.
 
 **Never ship a filter/control that looks like it works but doesn't.** This
 project has a running theme: several "obviously should exist" controls
-(subtitle filter/badge, "Статус" serial-finished filter, rating-range
-filters, age/language/translation/voice-studio filters) turned out to have
-**no real backing API field at all**, confirmed live. The consistent policy
+(subtitle filter/badge, "Статус" serial-finished filter,
+age/language/translation/voice-studio filters) turned out to have
+**no real backing API field at all**, confirmed live - rating ranges were
+on that list too until the right field names turned up, see item #17. The consistent policy
 has been: don't fake it, don't add the UI control, say so in a comment/
 changelog entry. Keep doing this — a user on this project would rather have
 an honest smaller filter panel than a bigger one with dead switches.
 
 ## Everything fixed/built, most recent first (README.md has full prose, this is the map)
 
-Backend 0.9.79 → 0.9.89 this stretch, frontend tests 159 → 233:
+Backend 0.9.79 → 0.9.90 this stretch, frontend tests 159 → 252:
 
+17. **Filter panel rebuilt to look like kino.pub's own**, and the two rating
+    ranges turned out to be real after all - `conditions[]` accepts
+    `imdb_rating` and `kinopoisk_rating` (item #15 below says they do not
+    exist; that was wrong, see README). Ratings step by whole numbers on
+    purpose: KinoPub discards the decimal part of the bound. The sliders are
+    remote-first (OK enters edit mode, OK swaps handle, arrows move, Back
+    exits) because two handles on one rail cannot be told apart by `move()`.
+    "Мне повезёт!" is wired to a real random pick inside the current filter.
 16. **Direct/HDR: the app was declaring the TV incapable and KinoPub believed
     it.** See open item #1 — this is the real fix for the report item #14
     below only appeared to close. Capability probes now have an "unknown"
@@ -180,9 +193,10 @@ Backend 0.9.79 → 0.9.89 this stretch, frontend tests 159 → 233:
     resolution — `quality=2160` silently returns nothing), Сортировка
     (`sort=field`/`-field`). Deliberately **not** added despite being on
     kino.watch's own panel: "Статус" (`finished` param is documented but
-    does nothing — verified live, identical counts with/without), rating
-    ranges/age/language/translation/voice-studio (no `v1/items` field for
-    any of them, documented or otherwise). Real bug found and fixed along
+    does nothing — verified live, identical counts with/without),
+    age/language/translation/voice-studio (no `v1/items` field for any of
+    them, documented or otherwise; rating ranges were wrongly on this
+    list too — they do exist, see item #17). Real bug found and fixed along
     the way: "Аниме" is `genre=25` under the hood (not a real `type`), and
     the filter panel's own genre picker was silently overwriting it —
     picking "Комедия" on the Anime page returned ordinary comedies, not

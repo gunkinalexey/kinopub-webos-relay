@@ -1,5 +1,5 @@
 (function(){'use strict';
-var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:Date.now(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,bookmarkFolders:null,bookmarkFolder:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
+var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:Date.now(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,bookmarkFolders:null,bookmarkFolder:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
 var $=function(id){return document.getElementById(id);},video=$('video');
 // Every backend call that needs a session (catalog, history, profile, item
 // details...) raises a real HTTP 401 the moment the cookie is gone or
@@ -76,7 +76,7 @@ function card(item){var p=ratings(item),status=watchedStatus(item),b=document.cr
 // don't come from v1/items at all, so a "Фильтры ▾" button there opened a
 // panel that could never do anything to what's on screen.
 function sectionHasFilters(cfg){return cfg.mode==='category';}
-function renderTop(){var cfg=routes[state.route]||routes.popular,root=$('catalogTop');root.innerHTML='';if(cfg.mode==='tabs'){var row=document.createElement('div');row.className='tab-row';var tabs=[['popular','Популярные'],['new','Свежие'],['hot','Горячие']];for(var i=0;i<tabs.length;i++){var bt=document.createElement('button');bt.className='focusable catalog-tab'+(state.route===tabs[i][0]?' active':'');bt.textContent=tabs[i][1];bt.onclick=(function(r){return function(){route(r);};}(tabs[i][0]));row.appendChild(bt);}root.appendChild(row);return;}var head=document.createElement('div');head.className='catalog-title-row';var title='<h3>';if(cfg.show3d)title+='<button class="focusable title-link'+(state.route!=='3d'?' title-current':'')+'" data-route-inline="movie">Фильмы</button><span class="title-sep">&nbsp;</span><button class="focusable title-link'+(state.route==='3d'?' title-current':'')+'" data-route-inline="3d">3D</button>';else title+=esc(cfg.title);title+='</h3>';var showFilters=sectionHasFilters(cfg);if(showFilters){var activeCount=activeFilterCount(cfg);title+='<button id="filterToggle" class="focusable filter-toggle">Фильтры'+(activeCount?' ('+activeCount+')':'')+' ▾</button>';}head.innerHTML=title;root.appendChild(head);var m=head.querySelector('[data-route-inline="movie"]');if(m)m.onclick=function(){route('movie');};var f=head.querySelector('[data-route-inline="3d"]');if(f)f.onclick=function(){route('3d');};var t=head.querySelector('#filterToggle');if(t)t.onclick=toggleFilters;if(showFilters)renderFilterPanel(cfg);}
+function renderTop(){var cfg=routes[state.route]||routes.popular,root=$('catalogTop');var active=document.activeElement;filterFocusId=active&&active.id&&active.id.indexOf('filter')===0&&root.contains(active)?active.id:'';root.innerHTML='';if(cfg.mode==='tabs'){var row=document.createElement('div');row.className='tab-row';var tabs=[['popular','Популярные'],['new','Свежие'],['hot','Горячие']];for(var i=0;i<tabs.length;i++){var bt=document.createElement('button');bt.className='focusable catalog-tab'+(state.route===tabs[i][0]?' active':'');bt.textContent=tabs[i][1];bt.onclick=(function(r){return function(){route(r);};}(tabs[i][0]));row.appendChild(bt);}root.appendChild(row);return;}var head=document.createElement('div');head.className='catalog-title-row';var title='<h3>';if(cfg.show3d)title+='<button class="focusable title-link'+(state.route!=='3d'?' title-current':'')+'" data-route-inline="movie">Фильмы</button><span class="title-sep">&nbsp;</span><button class="focusable title-link'+(state.route==='3d'?' title-current':'')+'" data-route-inline="3d">3D</button>';else title+=esc(cfg.title);title+='</h3>';var showFilters=sectionHasFilters(cfg);if(showFilters){var activeCount=activeFilterCount(cfg);title+='<button id="filterToggle" class="focusable filter-toggle">Фильтры'+(activeCount?' ('+activeCount+')':'')+' ▾</button>';}head.innerHTML=title;root.appendChild(head);var m=head.querySelector('[data-route-inline="movie"]');if(m)m.onclick=function(){route('movie');};var f=head.querySelector('[data-route-inline="3d"]');if(f)f.onclick=function(){route('3d');};var t=head.querySelector('#filterToggle');if(t)t.onclick=toggleFilters;if(showFilters)renderFilterPanel(cfg);}
 // Real filters against verified `v1/items` parameters (kinoapi.com/api_video.html
 // + live checks) - the old panel was six dead `<select>` with a single
 // "Любые" option and no wiring at all, nothing here actually filtered.
@@ -105,29 +105,69 @@ function sectionGenreType(cfg){
   default: return 'movie';
  }
 }
+var filterFocusId='';
 function filterStorageKey(cfg){return cfg.section+':'+cfg.feed;}
 function currentFilters(cfg){return state.catalogFilters[filterStorageKey(cfg)]||{};}
-function activeFilterCount(cfg){var f=currentFilters(cfg),n=0;for(var k in f)if(f[k])n++;return n;}
-function setFilter(cfg,name,value){
+// A moved range is one filter to the user even though it is two parameters,
+// so the "Фильтры (N)" badge counts the pair once.
+function activeFilterCount(cfg){
+ var f=currentFilters(cfg),n=0,seen={};
+ for(var k in f){
+  if(!f.hasOwnProperty(k)||!f[k])continue;
+  var group=FILTER_RANGE_GROUP[k];
+  if(group){if(seen[group])continue;seen[group]=true;}
+  n++;
+ }
+ return n;
+}
+function setFilter(cfg,name,value){setFilters(cfg,[[name,value]]);}
+// Ranges change both ends at once; committing them one at a time would
+// re-render (and refetch) the catalogue twice for a single move.
+function setFilters(cfg,pairs){
  var key=filterStorageKey(cfg),next={};
  var current=state.catalogFilters[key]||{};
  for(var k in current)if(current.hasOwnProperty(k))next[k]=current[k];
- if(value)next[name]=value;else delete next[name];
+ for(var i=0;i<pairs.length;i++){
+  var name=pairs[i][0],value=pairs[i][1];
+  if(value||value===0)next[name]=value;else delete next[name];
+ }
  state.catalogFilters[key]=next;
  renderCatalog();
 }
 function resetFilters(cfg){state.catalogFilters[filterStorageKey(cfg)]={};renderCatalog();}
-function filterYearOptions(){var y=new Date().getFullYear()+1,out=[['','Любой']];for(var year=y;year>=1930;year--)out.push([String(year),String(year)]);return out;}
 // Real range filtering, not a single exact-year match: `v1/items` documents
 // `conditions` with exactly one example ("year <= 100") and no encoding
 // shown, but no other endpoint-parity is claimed here - just what was
 // actually confirmed live via /bridge/explorer before writing this:
 // repeated `conditions[]=year>=1990&conditions[]=year<=2000` really does
 // AND together and really filters (dropped a ~7900-item list to ~12 for
-// `year<=1950`). Two plain <select> instead of kino.watch's drag slider -
-// there's no pointer on a TV remote, and every other control in this panel
-// is already a <select> for the same reason.
+// `year<=1950`).
+//
+// The two rating ranges are the same mechanism over `imdb_rating` and
+// `kinopoisk_rating` (see /catalog/list's docstring for how they were
+// confirmed, including the invented-field control that rules out "the
+// endpoint ignores every condition alike").
+//
+// These were three <select> before, on the reasoning that a drag slider is
+// useless without a pointer. That reasoning was right about dragging and
+// wrong about sliders: `makeRangeField` below is driven entirely by the
+// remote - OK enters edit mode, OK again swaps which end you are moving,
+// ←/→ move it, Back leaves - and the mouse is the extra, not the premise.
 var FILTER_ADDED=[['','За всё время'],['7','За неделю'],['30','За месяц'],['365','За год']];
+// Whole numbers on the rating sliders, not the 0.1 steps kino.pub's own
+// panel shows, because KinoPub discards the decimal part of the bound:
+// `imdb_rating>=7`, `>=7.1`, `>=7.5` and `>=7.9` all return the identical
+// 8444 pages (verified live, four values in a row, both operators, both
+// fields). A handle reading 7.5 that filters at 7 is precisely the kind of
+// control this panel refuses to ship.
+var FILTER_RANGES=[
+ {name:'year',label:'Год выхода',from:'year_from',to:'year_to',
+  min:1912,max:new Date().getFullYear()+1,step:1,decimals:0,ticks:5},
+ {name:'kp',label:'Рейтинг Кинопоиска',from:'kp_from',to:'kp_to',min:0,max:10,step:1,decimals:0,ticks:6},
+ {name:'imdb',label:'Рейтинг IMDb',from:'imdb_from',to:'imdb_to',min:0,max:10,step:1,decimals:0,ticks:6}
+];
+var FILTER_RANGE_GROUP={};
+for(var fr=0;fr<FILTER_RANGES.length;fr++){FILTER_RANGE_GROUP[FILTER_RANGES[fr].from]=FILTER_RANGES[fr].name;FILTER_RANGE_GROUP[FILTER_RANGES[fr].to]=FILTER_RANGES[fr].name;}
 function fillSelect(select,options,selected){select.innerHTML='';for(var i=0;i<options.length;i++){var o=document.createElement('option');o.value=options[i][0];o.textContent=options[i][1];if(options[i][0]===selected)o.selected=true;select.appendChild(o);}}
 function loadFilterGenres(type){
  if(state.filterGenres[type])return Promise.resolve(state.filterGenres[type]);
@@ -148,43 +188,225 @@ function loadFilterCountries(){
 // backend guard alone would leave a dropdown that looks like it works but
 // silently does nothing.
 function sectionOffersGenreFilter(cfg){return cfg.section!=='anime';}
+function rangeFormat(spec,value){return spec.decimals?value.toFixed(spec.decimals):String(Math.round(value));}
+function rangeSnap(spec,value){
+ var steps=Math.round((value-spec.min)/spec.step);
+ return Math.max(spec.min,Math.min(spec.max,spec.min+steps*spec.step));
+}
+// Builds one kino.pub-style two-handle slider.
+//
+// Everything below exists because this has to be usable from a remote as
+// well as a mouse:
+//   - one focus stop, not two. Two handles on one rail have overlapping
+//     bounding boxes and move() picks its target by comparing rect centres,
+//     so it could never distinguish them - and when both ends sit on the
+//     same value the boxes are literally identical.
+//   - ←/→ only get swallowed while editing. Outside edit mode they fall
+//     through to the global handler, so the panel still navigates normally
+//     and a slider can never trap focus.
+//   - the commit is debounced. Every step otherwise refetches the catalogue,
+//     and holding ← on a remote emits key repeats at ~30/s.
+function makeRangeField(cfg,spec,filters){
+ var field=document.createElement('div');field.className='filter-field';
+ var lo=filters[spec.from]===undefined||filters[spec.from]===''?spec.min:Number(filters[spec.from]);
+ var hi=filters[spec.to]===undefined||filters[spec.to]===''?spec.max:Number(filters[spec.to]);
+ lo=rangeSnap(spec,isFinite(lo)?lo:spec.min);hi=rangeSnap(spec,isFinite(hi)?hi:spec.max);
+ if(lo>hi)lo=hi;
+ var touched=lo>spec.min||hi<spec.max;
+ var edit=state.filterRangeEdit,editing=!!(edit&&edit.name===spec.name),edge=editing?edit.edge:'lo';
+ field.innerHTML='<span class="filter-label">'+esc(spec.label)+'</span>'+
+  '<div class="range-track focusable'+(touched?' set':'')+(editing?' editing':'')+'" tabindex="0" role="slider"'+
+  ' id="filterRange_'+spec.name+'" data-range="'+spec.name+'">'+
+   '<div class="range-rail">'+
+    '<i class="range-fill"></i>'+
+    '<i class="range-thumb lo"></i><i class="range-thumb hi"></i>'+
+    '<b class="range-bubble lo"></b><b class="range-bubble hi"></b>'+
+   '</div>'+
+   '<div class="range-ticks"></div>'+
+   '<div class="range-hint"></div>'+
+  '</div>';
+ var track=field.querySelector('.range-track'),rail=field.querySelector('.range-rail');
+ var fill=field.querySelector('.range-fill'),hint=field.querySelector('.range-hint');
+ var thumbs={lo:field.querySelector('.range-thumb.lo'),hi:field.querySelector('.range-thumb.hi')};
+ var bubbles={lo:field.querySelector('.range-bubble.lo'),hi:field.querySelector('.range-bubble.hi')};
+ var ticks=field.querySelector('.range-ticks');
+ // Ticks are snapped to the step so the scale never advertises a value the
+ // slider cannot actually stop on (0/2.5/5/7.5/10 under a step of 1 would
+ // print "3" at the 2.5 mark).
+ var tickCount=spec.ticks||5;
+ for(var t=0;t<tickCount;t++){
+  var span=document.createElement('span'),ratio=t/(tickCount-1);
+  span.className='range-tick';
+  span.textContent=rangeFormat(spec,rangeSnap(spec,spec.min+(spec.max-spec.min)*ratio));
+  span.style.left=(ratio*100)+'%';
+  ticks.appendChild(span);
+ }
+ function pct(value){return (value-spec.min)/(spec.max-spec.min)*100;}
+ function paint(){
+  // When both ends land on the same value the two handles would sit exactly
+  // on top of each other; nudging them a hair apart keeps both visible and
+  // keeps it obvious that there are two.
+  var same=lo===hi,loPct=pct(lo),hiPct=pct(hi);
+  thumbs.lo.style.left=(same?Math.max(0,loPct-1.2):loPct)+'%';
+  thumbs.hi.style.left=(same?Math.min(100,hiPct+1.2):hiPct)+'%';
+  // Shift each bubble by its own position rather than a flat -50%: at 0% it
+  // then hangs off the left edge and at 100% off the right, colliding with
+  // the neighbouring slider's label. Mapping 0->0, 50->-50%, 100->-100%
+  // keeps it inside the rail at the ends and centred everywhere else.
+  bubbles.lo.style.left=thumbs.lo.style.left;bubbles.hi.style.left=thumbs.hi.style.left;
+  bubbles.lo.style.transform='translateX(-'+parseFloat(thumbs.lo.style.left)+'%)';
+  bubbles.hi.style.transform='translateX(-'+parseFloat(thumbs.hi.style.left)+'%)';
+  fill.style.left=loPct+'%';fill.style.width=Math.max(0,hiPct-loPct)+'%';
+  bubbles.lo.textContent=rangeFormat(spec,lo);bubbles.hi.textContent=rangeFormat(spec,hi);
+  thumbs.lo.className='range-thumb lo'+(edge==='lo'?' active':'');
+  thumbs.hi.className='range-thumb hi'+(edge==='hi'?' active':'');
+  track.classList.toggle('set',lo>spec.min||hi<spec.max);
+  track.setAttribute('aria-valuetext',rangeFormat(spec,lo)+'–'+rangeFormat(spec,hi));
+  hint.textContent=track.classList.contains('editing')
+   ?'← → двигают '+(edge==='lo'?'левый':'правый')+' край · OK — другой край · Назад — готово'
+   :(lo>spec.min||hi<spec.max?'OK — изменить':' ');
+ }
+ var commitTimer=null;
+ function commit(){
+  if(commitTimer){clearTimeout(commitTimer);commitTimer=null;}
+  setFilters(cfg,[[spec.from,lo>spec.min?rangeFormat(spec,lo):''],
+                  [spec.to,hi<spec.max?rangeFormat(spec,hi):'']]);
+ }
+ function scheduleCommit(){if(commitTimer)clearTimeout(commitTimer);commitTimer=setTimeout(commit,450);}
+ function setEdge(which,value){
+  value=rangeSnap(spec,value);
+  if(which==='lo')lo=Math.min(value,hi);else hi=Math.max(value,lo);
+  paint();scheduleCommit();
+ }
+ function nudge(delta){setEdge(edge,(edge==='lo'?lo:hi)+delta*spec.step);}
+ // Order matters: commit() re-renders this whole panel synchronously, so the
+ // shared edit flag has to be cleared first or the replacement panel is
+ // rebuilt from a state that still says "editing" and the user never gets out.
+ function setEditing(on){
+  state.filterRangeEdit=on?{name:spec.name,edge:edge}:null;
+  track.classList.toggle('editing',!!on);
+  paint();
+  if(commitTimer&&!on)commit();
+ }
+ track.onkeydown=function(e){
+  var k=e.keyCode;
+  if(k===13){e.preventDefault();e.stopPropagation();
+   if(!track.classList.contains('editing')){setEditing(true);return;}
+   edge=edge==='lo'?'hi':'lo';state.filterRangeEdit={name:spec.name,edge:edge};paint();return;}
+  if(!track.classList.contains('editing'))return;      // let the panel navigate
+  if(k===37||k===39){e.preventDefault();e.stopPropagation();nudge(k===39?1:-1);return;}
+  if(k===27||k===461||k===10009||k===38||k===40){e.preventDefault();e.stopPropagation();setEditing(false);}
+ };
+ // Only a real blur ends edit mode. Rebuilding the panel detaches this node
+ // while it holds focus, and letting that path clear the shared edit state
+ // would drop the user out of the slider on their own first keystroke.
+ track.onblur=function(){if(document.body.contains(track)&&track.classList.contains('editing'))setEditing(false);};
+ // Mouse: click or drag the rail, whichever handle is nearer. No edit mode
+ // needed with a pointer - that ceremony is only there for the remote.
+ function fromClientX(clientX){
+  var rect=rail.getBoundingClientRect();
+  if(!rect.width)return null;
+  var ratio=Math.max(0,Math.min(1,(clientX-rect.left)/rect.width));
+  return spec.min+ratio*(spec.max-spec.min);
+ }
+ var dragging='';
+ rail.onmousedown=function(e){
+  var value=fromClientX(e.clientX);if(value===null)return;
+  dragging=Math.abs(value-lo)<=Math.abs(value-hi)?'lo':'hi';
+  edge=dragging;setEdge(dragging,value);e.preventDefault();
+ };
+ track.onmousemove=function(e){if(dragging){var v=fromClientX(e.clientX);if(v!==null)setEdge(dragging,v);}};
+ track.onmouseup=track.onmouseleave=function(){if(dragging){dragging='';commit();}};
+ paint();
+ return field;
+}
+function filterSelectField(label,id,extraClass){
+ return '<div class="filter-field"><span class="filter-label">'+esc(label)+'</span>'+
+  '<select id="'+id+'" class="focusable'+(extraClass||'')+'"></select></div>';
+}
+function bindFilterSelect(cfg,id,options,selected,name){
+ var select=$(id);if(!select)return;
+ fillSelect(select,options,selected||'');
+ select.classList.toggle('set',!!selected);
+ select.onchange=function(){setFilter(cfg,name,this.value);};
+}
 function renderFilterPanel(cfg){
  var old=$('filterPanel');if(old)old.parentNode.removeChild(old);
- if(!state.filterPanelOpen)return;
+ if(!state.filterPanelOpen){state.filterRangeEdit=null;return;}
  var filters=currentFilters(cfg),panel=document.createElement('div');
  var showGenre=sectionOffersGenreFilter(cfg);
  panel.id='filterPanel';panel.className='filter-panel';
  panel.innerHTML=
-  (showGenre?'<label>Жанр<select id="filterGenre" class="focusable"><option>Загрузка…</option></select></label>':'')+
-  '<label>Страна<select id="filterCountry" class="focusable"><option>Загрузка…</option></select></label>'+
-  '<label>Год от<select id="filterYearFrom" class="focusable"></select></label>'+
-  '<label>Год до<select id="filterYearTo" class="focusable"></select></label>'+
-  '<label>Период<select id="filterAdded" class="focusable"></select></label>'+
-  '<label>Качество<select id="filterQuality" class="focusable"></select></label>'+
-  '<label>Сортировка<select id="filterSort" class="focusable"></select></label>'+
-  '<label>&nbsp;<button id="filterReset" class="focusable secondary">Сбросить</button></label>';
+  '<div class="filter-row filter-row-selects">'+
+   (showGenre?filterSelectField('Жанр','filterGenre'):'')+
+   filterSelectField('Страна','filterCountry')+
+   filterSelectField('Качество','filterQuality')+
+   filterSelectField('Сортировка','filterSort')+
+   filterSelectField('Период','filterAdded')+
+  '</div>'+
+  '<div class="filter-row filter-row-ranges" id="filterRanges"></div>'+
+  '<div class="filter-actions">'+
+   '<button id="filterReset" class="focusable filter-button danger">Сбросить</button>'+
+   '<span class="filter-note" id="filterNote"></span>'+
+   '<button id="filterLucky" class="focusable filter-button ok">Мне повезёт!</button>'+
+  '</div>';
  $('catalogTop').appendChild(panel);
- var yearOptions=filterYearOptions();
- fillSelect($('filterYearFrom'),yearOptions,filters.year_from||'');
- fillSelect($('filterYearTo'),yearOptions,filters.year_to||'');
- fillSelect($('filterAdded'),FILTER_ADDED,filters.added_days||'');
- fillSelect($('filterQuality'),FILTER_QUALITIES,filters.quality||'');
- fillSelect($('filterSort'),FILTER_SORTS,filters.sort||'');
- $('filterYearFrom').onchange=function(){setFilter(cfg,'year_from',this.value);};
- $('filterYearTo').onchange=function(){setFilter(cfg,'year_to',this.value);};
- $('filterAdded').onchange=function(){setFilter(cfg,'added_days',this.value);};
- $('filterQuality').onchange=function(){setFilter(cfg,'quality',this.value);};
- $('filterSort').onchange=function(){setFilter(cfg,'sort',this.value);};
- $('filterReset').onclick=function(){resetFilters(cfg);};
- if(showGenre)loadFilterGenres(sectionGenreType(cfg)).then(function(list){
-  var select=$('filterGenre');if(!select)return;
-  fillSelect(select,[['','Любой']].concat(list.map(function(g){return [String(g.id),g.title];})),filters.genre||'');
-  select.onchange=function(){setFilter(cfg,'genre',this.value);};
- });
+ var ranges=$('filterRanges');
+ for(var i=0;i<FILTER_RANGES.length;i++)ranges.appendChild(makeRangeField(cfg,FILTER_RANGES[i],filters));
+ bindFilterSelect(cfg,'filterQuality',FILTER_QUALITIES,filters.quality,'quality');
+ bindFilterSelect(cfg,'filterSort',FILTER_SORTS,filters.sort,'sort');
+ bindFilterSelect(cfg,'filterAdded',FILTER_ADDED,filters.added_days,'added_days');
+ $('filterReset').onclick=function(){state.filterRangeEdit=null;resetFilters(cfg);};
+ $('filterLucky').onclick=function(){openRandomFromCatalogue(cfg,this);};
+ if(showGenre){
+  fillSelect($('filterGenre'),[['','Загрузка…']],'');
+  loadFilterGenres(sectionGenreType(cfg)).then(function(list){
+   bindFilterSelect(cfg,'filterGenre',[['','Любой']].concat(list.map(function(g){return [String(g.id),g.title];})),filters.genre,'genre');
+  });
+ }
+ fillSelect($('filterCountry'),[['','Загрузка…']],'');
  loadFilterCountries().then(function(list){
-  var select=$('filterCountry');if(!select)return;
-  fillSelect(select,[['','Любая']].concat(list.map(function(c){return [String(c.id),c.title];})),filters.country||'');
-  select.onchange=function(){setFilter(cfg,'country',this.value);};
+  bindFilterSelect(cfg,'filterCountry',[['','Любая']].concat(list.map(function(c){return [String(c.id),c.title];})),filters.country,'country');
+ });
+ // Every filter change re-renders this panel from scratch, so without this
+ // the control the user is working stops being focused after the first
+ // keystroke - fatal on a remote, where focus is the only cursor there is.
+ // The id has to be captured back in renderTop(), before it empties
+ // #catalogTop: by the time this function runs the old node is already gone
+ // and document.activeElement has fallen back to <body>.
+ if(filterFocusId&&$(filterFocusId))try{$(filterFocusId).focus();}catch(e){}
+ filterFocusId='';
+}
+// "Мне повезёт!" for real, not a decorative button: the catalogue already
+// reports how many pages the *current* filter matches, so this picks a
+// random page inside it, then a random title on that page, and opens it.
+// Nothing is faked - if the filter matches three titles, it picks one of
+// those three.
+function openRandomFromCatalogue(cfg,button){
+ var note=$('filterNote'),filters=currentFilters(cfg),perpage=catalogPerPage();
+ if(button)button.disabled=true;
+ if(note)note.textContent='Выбираем случайный тайтл…';
+ function pick(page){
+  return KPApi.catalog(cfg.section,cfg.feed,page,state.cacheVersion,perpage,filters).then(function(data){
+   var items=(data&&data.items)||[];
+   if(!items.length)return null;
+   return {item:items[Math.floor(Math.random()*items.length)],total:Number(data&&data.total_pages)||0};
+  });
+ }
+ pick(0).then(function(first){
+  if(!first)return null;
+  var total=first.total;
+  if(total<=1)return first;
+  var page=Math.floor(Math.random()*total);
+  return page===0?first:pick(page).then(function(other){return other||first;});
+ }).then(function(result){
+  if(button)button.disabled=false;
+  if(!result||!result.item){if(note)note.textContent='По этому фильтру ничего не нашлось';return;}
+  if(note)note.textContent='';
+  openDetails(result.item);
+ }).catch(function(err){
+  if(button)button.disabled=false;
+  if(note)note.textContent='Не получилось: '+(err&&err.message?err.message:String(err));
  });
 }
 function toggleFilters(){state.filterPanelOpen=!state.filterPanelOpen;renderFilterPanel(routes[state.route]||routes.popular);}
@@ -206,7 +428,7 @@ function catalogPerPage(){var cols=gridColumns();if(!cols)return state.catalogPe
 // changing a filter naturally lands on an unseen key, which means page 0,
 // no stale cache, and no known total-pages count - exactly the reset a
 // filter change should cause, for free.
-function catalogFilterSignature(cfg){var f=currentFilters(cfg),parts=[];['genre','country','year_from','year_to','added_days','quality','sort'].forEach(function(k){if(f[k])parts.push(k+'='+f[k]);});return parts.length?'?'+parts.join('&'):'';}
+function catalogFilterSignature(cfg){var f=currentFilters(cfg),parts=[];['genre','country','year_from','year_to','imdb_from','imdb_to','kp_from','kp_to','added_days','quality','sort'].forEach(function(k){if(f[k])parts.push(k+'='+f[k]);});return parts.length?'?'+parts.join('&'):'';}
 function catalogPageKey(cfg){
  if(cfg.mode==='history')return 'history:'+(state.historyType||'all');
  if(cfg.mode==='bookmarks')return 'bookmarks:'+(state.bookmarkFolder||'list');

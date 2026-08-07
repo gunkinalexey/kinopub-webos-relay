@@ -71,8 +71,26 @@ const check = (n, got, want) => {
   console.log(`${ok?'PASS':'FAIL'}  ${n}\n        got ${JSON.stringify(got)}${ok?'':`\n        want ${JSON.stringify(want)}`}`);
 };
 const settle = () => new Promise(r => setTimeout(r, 20));
+// The range sliders debounce their commit, so a filter move needs longer than
+// one microtask turn to reach KPApi.catalog.
+const settleRange = () => new Promise(r => setTimeout(r, 600));
 const qa = s => [...document.querySelectorAll(s)];
 const click = el => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+// jsdom ignores `keyCode` in the KeyboardEvent init dict, and every key path
+// in app.js reads exactly that (webOS remotes report legacy key codes), so it
+// has to be defined onto the event by hand.
+const press = (el, code) => {
+  const e = new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true });
+  Object.defineProperty(e, 'keyCode', { get: () => code });
+  el.dispatchEvent(e);
+  return e;
+};
+const OK = 13, LEFT = 37, RIGHT = 39, ESC = 27;
+const bubbles = name => {
+  const t = document.getElementById('filterRange_' + name);
+  return t ? [t.querySelector('.range-bubble.lo').textContent,
+              t.querySelector('.range-bubble.hi').textContent] : null;
+};
 
 (async () => {
   console.log('--- 3D is its own section, reachable from the sidebar ---');
@@ -153,41 +171,88 @@ const click = el => el.dispatchEvent(new window.MouseEvent('click', { bubbles: t
   check('quality options are the reference ids (4=4K), not raw resolutions',
     qa('#filterQuality option').map(o => o.value), ['','1','2','3','4']);
   check('sort has real v1/items field names', qa('#filterSort option').map(o => o.value)[1], '-created');
-  check('year is a from/to range, not a single exact match',
-    [!!document.getElementById('filterYearFrom'), !!document.getElementById('filterYearTo')], [true,true]);
   check('"Период" offers the real conditions[]=created>= presets',
     qa('#filterAdded option').map(o => o.value), ['','7','30','365']);
 
+  console.log('--- kino.pub-style range sliders replace the year selects ---');
+  check('three two-handle sliders', qa('.range-track').map(t => t.getAttribute('data-range')),
+    ['year','kp','imdb']);
+  check('the old year <select> pair is gone',
+    [!!document.getElementById('filterYearFrom'), !!document.getElementById('filterYearTo')], [false,false]);
+  // Whole numbers, not 0.1 steps: KinoPub discards the decimal part of a
+  // rating bound (`imdb_rating>=7`, `>=7.5` and `>=7.9` all return the same
+  // 8444 pages, verified live), so a handle reading 7.5 would be a lie.
+  check('rating scales are integer ticks', qa('#filterRange_imdb .range-tick').map(t => t.textContent),
+    ['0','2','4','6','8','10']);
+  check('sliders start at their full extent', [bubbles('imdb'), bubbles('kp')], [['0','10'],['0','10']]);
+  check('both kino.pub action buttons are there',
+    qa('.filter-button').map(b => b.textContent), ['Сбросить','Мне повезёт!']);
+
+  console.log('--- a slider is driven entirely by the remote ---');
+  const imdb = document.getElementById('filterRange_imdb');
+  imdb.focus();
+  check('arrow keys pass through until edit mode is entered',
+    imdb.classList.contains('editing'), false);
+  press(imdb, OK);
+  check('OK enters edit mode', imdb.classList.contains('editing'), true);
+  check('and says how to drive it', /← → двигают левый край/.test(imdb.querySelector('.range-hint').textContent), true);
+  press(imdb, OK);
+  check('OK again swaps to the other handle',
+    /← → двигают правый край/.test(imdb.querySelector('.range-hint').textContent), true);
+  press(imdb, OK);
+  calls.length = 0;
+  for (let i = 0; i < 8; i++) press(imdb, RIGHT);
+  check('right moves the low handle', bubbles('imdb')[0], '8');
+  check('but has not refetched yet - the commit is debounced', calls.length, 0);
+  await settleRange();
+  check('one refetch for the whole burst, not one per keypress',
+    calls.filter(c => c[0] === 'catalog').length, 1);
+  check('with the moved bound', lastCatalogFilters.imdb_from, '8');
+  check('and no upper bound, because that handle never moved', lastCatalogFilters.imdb_to, undefined);
+  // Losing focus here would strand a remote user: the panel is rebuilt from
+  // scratch on every commit, so it has to hand focus back to the same control.
+  check('focus survives the rebuild', document.activeElement.id, 'filterRange_imdb');
+  check('and so does edit mode',
+    document.getElementById('filterRange_imdb').classList.contains('editing'), true);
+  check('a moved range counts as one filter, not two',
+    document.getElementById('filterToggle').textContent, 'Фильтры (1) ▾');
+
+  press(document.getElementById('filterRange_imdb'), ESC);
+  await settleRange();
+  check('Back leaves edit mode', qa('.range-track.editing').length, 0);
+  check('and the value stays put', bubbles('imdb'), ['8','10']);
+
   console.log('--- picking a filter actually refetches with it ---');
   calls.length = 0;
-  const yearFrom = document.getElementById('filterYearFrom');
-  yearFrom.value = '2020';
-  yearFrom.dispatchEvent(new window.Event('change'));
+  const quality = document.getElementById('filterQuality');
+  quality.value = '4';
+  quality.dispatchEvent(new window.Event('change'));
   await settle();
   check('re-fetched the section', calls[0][0], 'catalog');
-  check('with the chosen year', lastCatalogFilters.year_from, '2020');
-  check('toggle button shows an active-filter count', document.getElementById('filterToggle').textContent, 'Фильтры (1) ▾');
+  check('with the chosen quality', lastCatalogFilters.quality, '4');
   check('panel stays open across the re-render', !!document.getElementById('filterPanel'), true);
-  check('and keeps the chosen value', document.getElementById('filterYearFrom').value, '2020');
+  check('and keeps the chosen value', document.getElementById('filterQuality').value, '4');
+  check('an active control is marked', document.getElementById('filterQuality').classList.contains('set'), true);
 
   console.log('--- resetting clears every filter in one click ---');
   click(document.getElementById('filterReset')); await settle();
   check('button label drops the count', document.getElementById('filterToggle').textContent, 'Фильтры ▾');
-  check('select goes back to "any"', document.getElementById('filterYearFrom').value, '');
+  check('select goes back to "any"', document.getElementById('filterQuality').value, '');
+  check('and the sliders go back to their full extent', bubbles('imdb'), ['0','10']);
 
   console.log('--- switching sections keeps its own filter set separate ---');
   // The panel is still open from the earlier click (state.filterPanelOpen
   // is a single global flag, not per-section) - renderTop() re-shows it on
   // every route change, so no extra click needed here.
-  document.getElementById('filterYearFrom').value = '2015';
-  document.getElementById('filterYearFrom').dispatchEvent(new window.Event('change'));
+  document.getElementById('filterQuality').value = '2';
+  document.getElementById('filterQuality').dispatchEvent(new window.Event('change'));
   await settle();
   app.route('serial'); await settle();
   check('a fresh section starts with no active filters',
     document.querySelector('#catalogTop .filter-toggle').textContent, 'Фильтры ▾');
   app.route('movie'); await settle();
   check('coming back to movies remembers its own filter',
-    document.getElementById('filterYearFrom').value, '2015');
+    document.getElementById('filterQuality').value, '2');
   click(document.getElementById('filterReset')); await settle();
   click(document.getElementById('filterToggle')); await settle();
   check('panel now closed', !!document.getElementById('filterPanel'), false);

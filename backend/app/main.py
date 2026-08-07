@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.89', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.90', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -811,6 +811,8 @@ async def catalog_list(
     section: str = 'movie', feed: str = 'fresh', page: int = 0, perpage: int = 48,
     genre: Optional[int] = None, country: Optional[int] = None,
     year_from: Optional[int] = None, year_to: Optional[int] = None, added_days: Optional[int] = None,
+    imdb_from: Optional[float] = None, imdb_to: Optional[float] = None,
+    kp_from: Optional[float] = None, kp_to: Optional[float] = None,
     quality: Optional[int] = None, sort: Optional[str] = None,
     kp_session: Optional[str] = Cookie(default=None),
 ) -> Dict[str, Any]:
@@ -838,11 +840,33 @@ async def catalog_list(
       Also confirmed live that the documented `finished` (0/1, "статус
       сериала") param does **nothing** at all - identical item count with
       and without it - so it is deliberately not exposed here; the filter
-      panel has no "Статус" control for the same reason. Same story for
-      rating ranges/age rating/language/translation/voice studio, all
-      visible on kino.watch's own filter panel: none of them exist as
-      `v1/items` parameters at all, documented or otherwise, so faking a
-      control for them was rejected rather than shipped non-functional.
+      panel has no "Статус" control for the same reason.
+    - **Rating ranges do exist**, as `conditions[]` fields named
+      `imdb_rating` and `kinopoisk_rating`. An earlier version of this
+      docstring claimed they did not - that was wrong, and it cost the
+      filter panel two controls. Confirmed live, three ways: `imdb_rating>=8`
+      cuts type=movie from ~31 990 to ~795 and every returned title really
+      does score >= 8; `imdb_rating>=7` + `imdb_rating<=8` AND together into
+      a genuine band; and an invented field (`bogus_field>=8`) leaves the
+      count *untouched*, which is what proves the endpoint recognises the
+      real two rather than ignoring all three alike.
+      Two honest caveats, both from live output. **The decimal part of the
+      bound is discarded upstream**: `imdb_rating>=7`, `>=7.1`, `>=7.5` and
+      `>=7.9` all return the identical 8444 pages, and the same holds for
+      `<=` and for `kinopoisk_rating` - so these bounds are whole numbers in
+      practice and the panel's sliders step by 1 rather than displaying a
+      precision the API will not honour. Values are floored here, which
+      reproduces upstream exactly (rounding 8.6 up to 9 would filter out
+      titles KinoPub itself would have returned). And a `<=` bound also
+      matches titles with no rating recorded at all, so an upper bound reads
+      "at most X, or unrated". Only bounds the user actually moved are sent.
+    - Age rating/language/translation/voice studio/subtitles/AC3, all
+      visible on kino.watch's own filter panel, were each tried live as
+      `v1/items` params (`age`, `lang`, `language`, `translation`, `voice`,
+      `subtitles`, `subtitle`, `ac3`, `advert`, `hd`, `nohd`, `uhd`) and
+      every one returned the unfiltered count. They do not exist here, so
+      faking a control for them was rejected rather than shipped
+      non-functional.
     """
     section = section.strip().lower()
     feed = feed.strip().lower()
@@ -875,6 +899,13 @@ async def catalog_list(
         conditions.append(f'year<={year_to}')
     if added_days is not None and added_days > 0:
         conditions.append(f'created>={int(time.time()) - added_days * 86400}')
+    # Floored, not rounded: KinoPub throws the decimal away itself (verified,
+    # see above), so flooring is what actually happened either way, while
+    # rounding up would quietly exclude titles the raw API would have kept.
+    for value, field, op in ((imdb_from, 'imdb_rating', '>='), (imdb_to, 'imdb_rating', '<='),
+                             (kp_from, 'kinopoisk_rating', '>='), (kp_to, 'kinopoisk_rating', '<=')):
+        if value is not None:
+            conditions.append(f'{field}{op}{int(max(0.0, min(10.0, float(value))))}')
     if conditions:
         selector['conditions[]'] = conditions
     if not endpoint:
