@@ -184,7 +184,12 @@ function pageButton(label,page,active,disabled,extraClass){var b=document.create
 function renderPagination(meta,itemCount){
  var root=$('catalogPagination');root.innerHTML='';
  var current=Math.max(0,parseInt(meta&&meta.page,10)||0),totalPages=Math.max(0,parseInt(meta&&meta.total_pages,10)||0),knownTotal=totalPages>0,hasItems=itemCount>0,pageFull=itemCount>=(meta&&meta.perpage||48);
- if(!hasItems&&current===0){root.classList.add('hidden');return;}
+ // A bar with a single, permanently-active "1" button (a known total of one
+ // page, or - before the total is even known - a first page that didn't
+ // fill up, so there's provably nothing after it) isn't pagination, it's
+ // noise: nothing on it is ever clickable in a way that changes the list.
+ var singlePage=knownTotal?totalPages<=1:(current===0&&!pageFull);
+ if((!hasItems&&current===0)||singlePage){root.classList.add('hidden');return;}
  root.classList.remove('hidden');
  // KinoPub keeps ten numeric buttons around the current page. Near the end,
  // show the final ten pages instead of only the last two or three.

@@ -204,6 +204,8 @@ const click = el => el.dispatchEvent(new window.MouseEvent('click', { bubbles: t
     ['Как стать миллионером','Притворись моей женой']);
   check('header names the open folder and offers a way back',
     document.querySelector('#catalogTop h3').textContent.indexOf('йоу') >= 0, true);
+  check('a single-page folder shows no pagination bar at all',
+    document.getElementById('catalogPagination').classList.contains('hidden'), true);
 
   click(document.getElementById('bookmarksBack')); await settle();
   check('back returns to the folder list', qa('.bookmark-folder-card').length, 1);
