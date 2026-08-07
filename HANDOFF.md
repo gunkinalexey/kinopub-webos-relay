@@ -211,10 +211,10 @@ New from this session:
   sidebar button is still dead, no `data-route`) are both confirmed-real,
   unused endpoints, found during the API survey that led to items #1/#8.
   Not requested yet, but the user may come back to either.
-- **`v1/tv`** is a real live-TV-channel list (m3u8 streams, includes actual
-  sport channels — ESPN, Eurosport, Fox Sports, TNT Sport UHD). The "Спорт"
-  sidebar section is still just a VOD catalogue filter, not this. User was
-  told this exists; hasn't asked for it to be built yet.
+- ~~**`v1/tv`** is a real live-TV-channel list...~~ **Built.** "Спорт" is now
+  `GET /catalog/tv` (real `v1/tv`, all 51 channels for this account are
+  sport) rendered as a channel-logo grid, playback via the existing `/hls`
+  relay. See README.md v0.9.90 / backend 0.9.83.
 
 ## Testing infrastructure
 

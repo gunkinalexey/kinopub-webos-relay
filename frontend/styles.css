@@ -209,3 +209,18 @@ body.auth-locked .sidebar,body.auth-locked .content-shell{visibility:hidden;poin
 .search-suggestions::-webkit-scrollbar-track{background:#fff}
 .search-suggestions::-webkit-scrollbar-thumb{background:#c9ccd2}
 .search-suggestions::-webkit-scrollbar-thumb:hover{background:#9aa1ac}
+
+/* ---- "Спорт": live TV channels (v1/tv), not a VOD grid ---- */
+/* Channel logos are square/wide PNGs on a transparent background (the image
+   proxy composites transparency onto the theme's dark background already),
+   not 2:3 movie posters - `cover` would crop them, so this overrides it to
+   `contain` and centers the logo instead. */
+.tv-art{background-size:contain!important;background-color:#232b40}
+.tv-card .item-title{text-align:center}
+
+/* ---- Native fullscreen escape-hatch button ---- */
+#nativeFullscreen svg{stroke-width:3.4}
+
+/* ---- Live channel playback: no position/duration, so hide controls that
+   only make sense for a seekable VOD file. ---- */
+.player-layer.live .timeline,.player-layer.live .time-row,.player-layer.live #rewind,.player-layer.live #forward,.player-layer.live .player-selects{display:none}

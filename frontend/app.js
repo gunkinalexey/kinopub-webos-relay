@@ -34,7 +34,7 @@ var routes={
  documovie:{title:'Документальные фильмы',mode:'category',section:'documovie',feed:'all'},
  docuserial:{title:'Документальные сериалы',mode:'category',section:'docuserial',feed:'all'},
  tvshow:{title:'ТВ Шоу',mode:'category',section:'tvshow',feed:'all'},
- sport:{title:'Спорт',mode:'category',section:'sport',feed:'all'},
+ sport:{title:'Спорт',mode:'tv'},
  settings:{title:'Настройки',mode:'settings'}
 };
 function esc(v){var d=document.createElement('div');d.textContent=String(v==null?'':v);return d.innerHTML;}
@@ -170,10 +170,41 @@ function renderWatching(cfg){
   KPApi.report('Watching list failed',{error:String(err)},'catalog').catch(function(){});
  });
 }
+// "Спорт" - real live TV channels (v1/tv), not a VOD genre filter: this
+// account's channel list is entirely sport (ESPN, Eurosport, MATCH!...),
+// same as kino.watch's own "Спортивные трансляции" page. Logos are square-
+// ish, not 2:3 movie posters, so the card uses `background-size:contain`
+// (`.tv-art` in styles.css) instead of the usual cropped `cover`.
+function tvChannelCard(ch){
+ var b=document.createElement('button');b.className='media-card tv-card focusable';
+ b.innerHTML='<div class="poster-art tv-art"></div><div class="item-title">'+esc(ch.title||'')+'</div>';
+ var art=b.querySelector('.poster-art');if(art&&ch.logo)art.style.background=bgCss(ch.logo,'poster');
+ b.onclick=function(){playChannel(ch);};
+ return b;
+}
+function renderTv(cfg){
+ renderTop();
+ var g=$('catalogGrid');
+ g.className='poster-grid tv-grid';$('catalogPagination').classList.add('hidden');
+ g.innerHTML='<p class="empty-state">Загружаем каналы…</p>';
+ var requestId=++state.catalogRequest;
+ KPApi.tvChannels().then(function(data){
+  if(requestId!==state.catalogRequest)return;
+  var channels=(data&&data.channels)||[];
+  g.innerHTML='';
+  for(var i=0;i<channels.length;i++)g.appendChild(tvChannelCard(channels[i]));
+  if(!channels.length)g.innerHTML='<p class="empty-state">Каналы не найдены</p>';
+ }).catch(function(err){
+  if(requestId!==state.catalogRequest)return;
+  g.innerHTML='<p class="empty-state">Не удалось загрузить раздел: '+esc(err&&err.message?err.message:String(err))+'</p>';
+  KPApi.report('TV channels failed',{error:String(err)},'catalog').catch(function(){});
+ });
+}
 function renderCatalog(){
  var cfg=routes[state.route]||routes.popular;
  if(cfg.mode==='history'){renderHistory(cfg);return;}
  if(cfg.mode==='watching'){renderWatching(cfg);return;}
+ if(cfg.mode==='tv'){renderTv(cfg);return;}
  renderTop();
  var g=$('catalogGrid'),page=currentCatalogPage(cfg);
  g.className='poster-grid';
@@ -726,11 +757,48 @@ function playerFullscreenMode(){var mode=state.settings&&state.settings.player_f
 // Must run inside the click that started playback: the user-activation window
 // is gone by the time the play API call resolves.
 function enterPlayerFullscreen(){var mode=playerFullscreenMode();if(mode==='off')return;if(fullscreenElement())return;requestFullscreen(mode==='video'?video:$('playerLayer'));}
-function play(item,episode,startAt){enterPlayerFullscreen();state.playerResumePosition=Math.max(0,Number(startAt)||0);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);state.audioHlsJobId='';state.audioHlsPendingJobId='';if(!ensureSubscriptionForPlayback()){openSubscription();return;}state.audioHlsPollToken++;state.audioHlsPreparing=false;state.audioHlsActive=false;state.audioHlsOffset=0;state.audioHlsSelectedIndex=-1;state.playerAudioChoice='auto';state.playerOriginalDuration=0;state.hdrFellBack=false;state.current=item;state.episodeSeason=null;state.episodeNumber=null;$('playerTitle').textContent=item.title+(episode&&episode.title?' · '+episode.title:'');$('playerLayer').classList.remove('hidden');showPlayerControls();$('playerError').textContent='Получаем ссылку на видео…';var mediaId=episode&&(episode.media_id||episode.id);KPApi.play(item.id,mediaId).then(function(result){var st=result.selected||((result.streams||[])[0]);if(!st||!st.url)throw new Error('Ссылка на видео не найдена');preparePlayerOptions(result,st);$('playerError').textContent='';var group=currentQualityGroup(),preferred=preferredModeFor(group),initialUrl=streamUrlForGroup(group,preferred)||st.url;state.hdrAttempt=preferred==='direct'&&isHevcGroup(group);state.episodeSeason=(result.media&&result.media.season)||null;state.episodeNumber=(result.media&&result.media.episode)||null;openUrl(initialUrl,preferred,(result.media&&result.media.id)||mediaId||'');}).catch(function(err){$('playerError').textContent='Не удалось получить поток: '+(err&&err.message?err.message:String(err));KPApi.report('Resolve stream failed',{item_id:item.id,error:String(err)},'media').catch(function(){});});}
+// Explicit escape hatch to the video element's own native fullscreen,
+// independent of the "Полный экран в плеере" setting - promoting the
+// <video> itself (not the layer div around it) is what typically hands
+// playback to the TV's hardware video plane, which is what makes HDR
+// passthrough possible at all (see v0.9.68). The setting still controls
+// what happens automatically at play() start; this button lets a session
+// already running in "своя оболочка"/"выключен" mode switch to native
+// mid-playback without restarting the video.
+var NATIVE_FULLSCREEN_ICONS={
+ enter:'<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M6 17V6h11M42 17V6H31M6 31v11h11M42 31v11H31"/></svg>',
+ exit:'<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M17 6v11H6M31 6v11h11M17 42V31H6M31 42V31h11"/></svg>'
+};
+function updateFullscreenButton(){var b=$('nativeFullscreen');if(!b)return;var active=fullscreenElement()===video;var label=active?'Выйти из полноэкранного видео':'Полноэкранное видео (нативное, для HDR)';b.setAttribute('aria-label',label);b.title=label;b.innerHTML=active?NATIVE_FULLSCREEN_ICONS.exit:NATIVE_FULLSCREEN_ICONS.enter;}
+function toggleNativeFullscreen(){var current=fullscreenElement();if(current===video){exitFullscreen();return;}if(current){var fn=document.exitFullscreen||document.webkitExitFullscreen||document.webkitCancelFullScreen;try{var p=fn&&fn.call(document);if(p&&p.then){p.then(function(){requestFullscreen(video);});return;}}catch(e){}}requestFullscreen(video);}
+// Live TV channels (playChannel, below) share this same player but have no
+// position/duration/episode concept - flagging state.current.live keeps
+// saveProgress() (position tracking) from writing meaningless entries for
+// them, and lets the CSS hide controls that don't apply to a live stream.
+function playChannel(ch){
+ enterPlayerFullscreen();
+ if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);
+ if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);
+ state.audioHlsJobId='';state.audioHlsPendingJobId='';
+ if(!ensureSubscriptionForPlayback()){openSubscription();return;}
+ state.audioHlsPollToken++;state.audioHlsPreparing=false;state.audioHlsActive=false;state.audioHlsOffset=0;state.audioHlsSelectedIndex=-1;state.playerAudioChoice='auto';state.playerOriginalDuration=0;state.hdrFellBack=false;state.playerResumePosition=0;
+ state.current={id:'tv-'+ch.id,title:ch.title,live:true};
+ state.episodeSeason=null;state.episodeNumber=null;
+ $('playerTitle').textContent=ch.title;
+ $('playerLayer').classList.remove('hidden');$('playerLayer').classList.add('live');
+ showPlayerControls();
+ $('playerError').textContent='';
+ state.playerStreams=[];state.playerSubtitles=[];state.playerAudios=[];state.expectedTracks=0;
+ populateAudioMenu();populateSubtitleMenu();
+ $('playerQuality').innerHTML='<option value="">Прямой эфир</option>';
+ openUrl(ch.stream,'hls','',undefined);
+ $('playerMode').textContent='В ЭФИРЕ';
+}
+function play(item,episode,startAt){$('playerLayer').classList.remove('live');enterPlayerFullscreen();state.playerResumePosition=Math.max(0,Number(startAt)||0);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);state.audioHlsJobId='';state.audioHlsPendingJobId='';if(!ensureSubscriptionForPlayback()){openSubscription();return;}state.audioHlsPollToken++;state.audioHlsPreparing=false;state.audioHlsActive=false;state.audioHlsOffset=0;state.audioHlsSelectedIndex=-1;state.playerAudioChoice='auto';state.playerOriginalDuration=0;state.hdrFellBack=false;state.current=item;state.episodeSeason=null;state.episodeNumber=null;$('playerTitle').textContent=item.title+(episode&&episode.title?' · '+episode.title:'');$('playerLayer').classList.remove('hidden');showPlayerControls();$('playerError').textContent='Получаем ссылку на видео…';var mediaId=episode&&(episode.media_id||episode.id);KPApi.play(item.id,mediaId).then(function(result){var st=result.selected||((result.streams||[])[0]);if(!st||!st.url)throw new Error('Ссылка на видео не найдена');preparePlayerOptions(result,st);$('playerError').textContent='';var group=currentQualityGroup(),preferred=preferredModeFor(group),initialUrl=streamUrlForGroup(group,preferred)||st.url;state.hdrAttempt=preferred==='direct'&&isHevcGroup(group);state.episodeSeason=(result.media&&result.media.season)||null;state.episodeNumber=(result.media&&result.media.episode)||null;openUrl(initialUrl,preferred,(result.media&&result.media.id)||mediaId||'');}).catch(function(err){$('playerError').textContent='Не удалось получить поток: '+(err&&err.message?err.message:String(err));KPApi.report('Resolve stream failed',{item_id:item.id,error:String(err)},'media').catch(function(){});});}
 function switchStreamMode(mode){if(!mode)return;var group=currentQualityGroup(),url=streamUrlForGroup(group,mode);if(!url){$('playerError').textContent='Для выбранного режима нет ссылки на поток.';return;}if(!state.audioHlsActive&&!state.audioHlsPreparing&&mode===state.mode)return;state.audioHlsPollToken++;state.audioHlsPreparing=false;if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);state.audioHlsPendingJobId='';state.playerAudioChoice='auto';state.pendingAltAudioIndex=-1;state.altAudioUrl='';populateAudioMenu();var resume=currentResume();$('playerError').textContent='Переключаем поток…';openUrl(url,mode,state.episodeId,resume);clearSwitchMessage(resume);}
 function switchQuality(index){var group=state.playerStreams[Number(index)];if(!group)return;state.playerQualityIndex=String(index);var mode=state.audioHlsActive?state.baseStreamMode:state.mode,url=streamUrlForGroup(group,mode);if(!url){$('playerError').textContent='Для этого качества нет подходящего потока.';return;}if(!state.audioHlsActive&&!state.audioHlsPreparing&&url===state.streamUrl)return;state.audioHlsPollToken++;state.audioHlsPreparing=false;if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);state.audioHlsPendingJobId='';state.playerAudioChoice='auto';state.pendingAltAudioIndex=-1;state.altAudioUrl='';populateAudioMenu();var resume=currentResume();$('playerError').textContent='Меняем качество…';openUrl(url,mode,state.episodeId,resume);clearSwitchMessage(resume);}
-function saveProgress(){if(!state.current)return;var savedPosition=Math.max(logicalCurrentTime(),Number(state.playerResumePosition)||0),totalDuration=logicalDuration();var completed=!!(totalDuration&&savedPosition/totalDuration>=.9);if(completed)state.watchedMap[String(state.current.id)]=1;else if(savedPosition>0&&state.watchedMap[String(state.current.id)]===undefined)state.watchedMap[String(state.current.id)]=0;KPApi.saveProgress({media_id:state.current.id,episode_id:state.episodeId||null,position:savedPosition,duration:totalDuration||0,completed:completed,season:state.episodeSeason||null,episode_number:state.episodeNumber||null}).catch(function(){});}
-function closePlayer(){exitFullscreen();saveProgress();state.audioHlsPollToken++;state.audioHlsPreparing=false;if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);state.audioHlsPendingJobId='';state.audioHlsJobId='';video.pause();state.playerSwitching=false;destroyHls();video.removeAttribute('src');video.load();$('playerLayer').classList.add('hidden');$('playerLayer').classList.remove('controls-hidden');if(playerControlsTimer){clearTimeout(playerControlsTimer);playerControlsTimer=null;}}
+function saveProgress(){if(!state.current||state.current.live)return;var savedPosition=Math.max(logicalCurrentTime(),Number(state.playerResumePosition)||0),totalDuration=logicalDuration();var completed=!!(totalDuration&&savedPosition/totalDuration>=.9);if(completed)state.watchedMap[String(state.current.id)]=1;else if(savedPosition>0&&state.watchedMap[String(state.current.id)]===undefined)state.watchedMap[String(state.current.id)]=0;KPApi.saveProgress({media_id:state.current.id,episode_id:state.episodeId||null,position:savedPosition,duration:totalDuration||0,completed:completed,season:state.episodeSeason||null,episode_number:state.episodeNumber||null}).catch(function(){});}
+function closePlayer(){exitFullscreen();saveProgress();$('playerLayer').classList.remove('live');state.audioHlsPollToken++;state.audioHlsPreparing=false;if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);state.audioHlsPendingJobId='';state.audioHlsJobId='';video.pause();state.playerSwitching=false;destroyHls();video.removeAttribute('src');video.load();$('playerLayer').classList.add('hidden');$('playerLayer').classList.remove('controls-hidden');if(playerControlsTimer){clearTimeout(playerControlsTimer);playerControlsTimer=null;}}
 // video.play() returns a promise that rejects with AbortError whenever the
 // element is paused or reloaded before playback actually begins. That happens
 // on every quality/audio/stream switch and when closing the player, and it is
@@ -820,11 +888,17 @@ function seekLogical(target){target=Math.max(0,Math.min(logicalDuration()||Infin
 // report detail >= 1, so a synthetic one toggles playback instead of seeking.
 function seekFromTimelineEvent(e){if(!e||!e.detail){toggleVideoPlayback();return;}var duration=logicalDuration();if(!isFinite(duration)||duration<=0)return;var rect=$('timeline').getBoundingClientRect();if(!rect.width)return;var x=Math.max(0,Math.min(rect.width,e.clientX-rect.left));seekLogical((x/rect.width)*duration);}
 function updatePlayerProgress(){var current=logicalCurrentTime(),duration=logicalDuration();if(current>0&&!state.playerSwitching)state.playerResumePosition=current;var ratio=(duration&&isFinite(duration))?Math.max(0,Math.min(1,current/duration)):0;$('progress').style.width=(ratio*100)+'%';$('timeline').setAttribute('aria-valuenow',String(Math.round(ratio*100)));$('currentTime').textContent=fmt(current);$('duration').textContent=fmt(duration);}
-$('playerLayer').onclick=function(e){if(e.target.closest&&e.target.closest('.player-controls, .timeline, .player-close-x'))return;toggleVideoPlayback();showPlayerControls();};
+// When the <video> element itself is the fullscreen target, the platform's
+// own native fullscreen video chrome (the TV/browser's built-in tap-to-pause
+// gesture) reacts to the same click independently of this handler - the DOM
+// click still bubbles up to playerLayer regardless of fullscreen, so without
+// this guard a single click toggled playback twice (native, then ours),
+// which looked like the video pausing and immediately resuming itself.
+$('playerLayer').onclick=function(e){if(e.target.closest&&e.target.closest('.player-controls, .timeline, .player-close-x'))return;if(fullscreenElement()===video)return;toggleVideoPlayback();showPlayerControls();};
 $('timeline').onclick=function(e){e.stopPropagation();seekFromTimelineEvent(e);};
 $('timeline').onkeydown=function(e){if(e.keyCode===37||e.keyCode===39){e.preventDefault();e.stopPropagation();var step=Math.max(5,(logicalDuration()||0)*0.01);seekLogical(logicalCurrentTime()+(e.keyCode===37?-step:step));}};
-$('togglePlay').onclick=function(e){e.stopPropagation();toggleVideoPlayback(false);showPlayerControls();};$('rewind').onclick=function(){seekLogical(logicalCurrentTime()-10);showPlayerControls();};$('forward').onclick=function(){seekLogical(logicalCurrentTime()+10);showPlayerControls();};$('playerStreamMode').onchange=function(e){e.stopPropagation();switchStreamMode(this.value);showPlayerControls();};$('playerQuality').onchange=function(e){e.stopPropagation();switchQuality(this.value);showPlayerControls();};$('playerSubtitles').onchange=function(e){e.stopPropagation();applySubtitleChoice(this.value);showPlayerControls();};$('playerSubtitleSize').onchange=function(e){e.stopPropagation();var size=applySubtitleSize(this.value);showPlayerControls();var next={};for(var k in state.settings)if(state.settings.hasOwnProperty(k))next[k]=state.settings[k];next.subtitle_size=size;KPApi.saveSettings(next).catch(function(){});};$('playerAudio').onchange=function(e){e.stopPropagation();applyAudioChoice(this.value);showPlayerControls();};$('closePlayer').onclick=closePlayer;$('playerCloseX').onclick=function(e){e.stopPropagation();closePlayer();};$('playerLayer').onmousemove=showPlayerControls;$('playerLayer').onmouseenter=showPlayerControls;function refreshNativeTracks(){populateAudioMenu();populateSubtitleMenu();reapplyAudioSelection();applySubtitleChoice(state.playerSubtitleChoice);}video.addEventListener('loadedmetadata',refreshNativeTracks);video.addEventListener('loadeddata',refreshNativeTracks);video.addEventListener('canplay',refreshNativeTracks);if(video.audioTracks){video.audioTracks.onaddtrack=refreshNativeTracks;video.audioTracks.onchange=function(){populateAudioMenu();};}if(video.textTracks){video.textTracks.onaddtrack=refreshNativeTracks;video.textTracks.onchange=function(){populateSubtitleMenu();};}video.addEventListener('play',showPlayerControls);video.addEventListener('pause',keepPlayerControlsVisible);video.addEventListener('ended',keepPlayerControlsVisible);
-document.addEventListener('fullscreenchange',function(){keepPlayerControlsVisible();});document.addEventListener('webkitfullscreenchange',function(){keepPlayerControlsVisible();});
+$('togglePlay').onclick=function(e){e.stopPropagation();toggleVideoPlayback(false);showPlayerControls();};$('rewind').onclick=function(){seekLogical(logicalCurrentTime()-10);showPlayerControls();};$('forward').onclick=function(){seekLogical(logicalCurrentTime()+10);showPlayerControls();};$('nativeFullscreen').onclick=function(e){e.stopPropagation();toggleNativeFullscreen();showPlayerControls();};$('playerStreamMode').onchange=function(e){e.stopPropagation();switchStreamMode(this.value);showPlayerControls();};$('playerQuality').onchange=function(e){e.stopPropagation();switchQuality(this.value);showPlayerControls();};$('playerSubtitles').onchange=function(e){e.stopPropagation();applySubtitleChoice(this.value);showPlayerControls();};$('playerSubtitleSize').onchange=function(e){e.stopPropagation();var size=applySubtitleSize(this.value);showPlayerControls();var next={};for(var k in state.settings)if(state.settings.hasOwnProperty(k))next[k]=state.settings[k];next.subtitle_size=size;KPApi.saveSettings(next).catch(function(){});};$('playerAudio').onchange=function(e){e.stopPropagation();applyAudioChoice(this.value);showPlayerControls();};$('closePlayer').onclick=closePlayer;$('playerCloseX').onclick=function(e){e.stopPropagation();closePlayer();};$('playerLayer').onmousemove=showPlayerControls;$('playerLayer').onmouseenter=showPlayerControls;function refreshNativeTracks(){populateAudioMenu();populateSubtitleMenu();reapplyAudioSelection();applySubtitleChoice(state.playerSubtitleChoice);}video.addEventListener('loadedmetadata',refreshNativeTracks);video.addEventListener('loadeddata',refreshNativeTracks);video.addEventListener('canplay',refreshNativeTracks);if(video.audioTracks){video.audioTracks.onaddtrack=refreshNativeTracks;video.audioTracks.onchange=function(){populateAudioMenu();};}if(video.textTracks){video.textTracks.onaddtrack=refreshNativeTracks;video.textTracks.onchange=function(){populateSubtitleMenu();};}video.addEventListener('play',showPlayerControls);video.addEventListener('pause',keepPlayerControlsVisible);video.addEventListener('ended',keepPlayerControlsVisible);
+document.addEventListener('fullscreenchange',function(){keepPlayerControlsVisible();updateFullscreenButton();});document.addEventListener('webkitfullscreenchange',function(){keepPlayerControlsVisible();updateFullscreenButton();});
 if(typeof window!=='undefined'&&window.addEventListener)window.addEventListener('hashchange',applyHash);
 // The sidebar has its own overflow:auto (its nav list can outgrow the
 // window on a short screen), so a wheel scroll started over it scrolled the

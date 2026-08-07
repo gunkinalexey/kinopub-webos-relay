@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.82', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.83', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -1175,6 +1175,38 @@ async def catalog_watching(kp_session: Optional[str] = Cookie(default=None)) -> 
         items.append(item)
     log_event('catalog', 'Watching list loaded', {'count': len(items)})
     return {'items': items, 'total_items': len(items)}
+
+
+@app.get('/catalog/tv')
+async def catalog_tv(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """Live TV channels - a real, separate KinoPub feature from the VOD
+    catalogue (`v1/tv`, kinoapi.com/api_tv.html), not the mock feed the
+    "Спорт" sidebar section used before (a VOD genre filter that returned
+    movies/series, not the actual live channel list kino.watch's own
+    "Спортивные трансляции" page shows there). Verified live: every channel
+    this account's `v1/tv` returns is sport (ESPN, Eurosport, Fox Sports,
+    TNT Sport UHD, MATCH!-branded channels...) and matches that page's own
+    channel list one-for-one, so no further genre filtering is needed here.
+    """
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    payload = await kino_get(session, 'v1/tv', {})
+    raw_channels = payload.get('channels') if isinstance(payload, dict) else None
+    channels: List[Dict[str, Any]] = []
+    for raw in (raw_channels or []):
+        if not isinstance(raw, dict):
+            continue
+        stream = str(raw.get('stream') or '').strip()
+        if not stream:
+            continue
+        channels.append({
+            'id': str(raw.get('id', '')),
+            'name': str(raw.get('name') or ''),
+            'title': str(raw.get('title') or '').strip(),
+            'logo': _image_url(raw.get('logos')),
+            'stream': stream,
+        })
+    log_event('catalog', 'TV channels loaded', {'count': len(channels)})
+    return {'channels': channels}
 
 
 @app.get('/catalog/autocomplete')
