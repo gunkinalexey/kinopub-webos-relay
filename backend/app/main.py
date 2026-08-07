@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.85', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.86', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -1294,13 +1294,27 @@ async def catalog_bookmarks(kp_session: Optional[str] = Cookie(default=None)) ->
 async def catalog_bookmark_folder(folder_id: str, page: int = 0, perpage: int = 48, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
     """One bookmark folder's contents (`v1/bookmarks/view?folder=`) - same
     item shape as the regular catalogue, so the existing card/details flow
-    works unchanged."""
+    works unchanged.
+
+    Deliberately does NOT go through `extract_catalog_items()` here, unlike
+    every other list endpoint. That function recursively walks the whole
+    payload and dedupes by id, which is right when items can plausibly
+    appear more than once *from the shape of the walk itself* (nested under
+    several keys). A bookmark folder is already a flat `items` array, so a
+    repeated id there means the account genuinely bookmarked the same title
+    twice - confirmed live on this account's own folder (`Тор: Любовь и гром`
+    appears twice, real duplicate entries, not a parsing artifact). Deduping
+    silently showed 4 cards under a folder whose own `count` said 5, which
+    is exactly the mismatch that got reported. Keeping every entry (even a
+    literal duplicate) makes the grid match the folder's own count number.
+    """
     session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     api_page = max(0, page) + 1
     perpage = max(1, min(perpage, 100))
     payload = await kino_get(session, 'v1/bookmarks/view', {'folder': folder_id, 'page': api_page, 'perpage': perpage})
     raw_folder = payload.get('folder') if isinstance(payload, dict) else {}
-    items = extract_catalog_items(payload)
+    raw_items = payload.get('items') if isinstance(payload, dict) else None
+    items = [normalize_catalog_item(r) for r in (raw_items or []) if isinstance(r, dict)]
     totals = _pagination_values(payload, perpage)
     return {
         'folder': {'id': folder_id, 'title': str((raw_folder or {}).get('title') or '')},
