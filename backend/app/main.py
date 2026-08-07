@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.79', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.80', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -462,6 +462,10 @@ def normalize_catalog_item(raw: Dict[str, Any]) -> Dict[str, Any]:
         # not subtitles, which would otherwise be a fake always-on icon.
         'has_dolby': bool(raw.get('ac3')),
         'quality': raw.get('quality') if isinstance(raw.get('quality'), (int, float)) else None,
+        # Only present on a single item's own detail fetch (`v1/items/{id}`),
+        # not on list payloads - real "Буду смотреть" tracking flag, the same
+        # one `v1/watching/serials?subscribed=1` filters on.
+        'subscribed': bool(raw.get('subscribed')),
     }
 
 
@@ -1121,21 +1125,28 @@ async def catalog_history(page: int = 0, perpage: int = 48, type: str = '', kp_s
 
 @app.get('/catalog/watching')
 async def catalog_watching(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
-    """"Я смотрю" ("I'm watching") - series being followed that have new,
-    not-yet-watched episodes, straight from KinoPub's own `v1/watching/
-    serials` (a real, dedicated endpoint - not something built by scanning
-    /catalog/history, which would have meant "everything ever watched" and
-    missed the point of this section: which shows still have something new).
-    Each entry carries real total/watched/new episode counts.
+    """"Я смотрю" ("I'm watching") - series explicitly marked "Буду смотреть"
+    (subscribed via `v1/watching/togglewatchlist`), straight from KinoPub's
+    own `v1/watching/serials?subscribed=1` (a real, dedicated endpoint - not
+    something built by scanning /catalog/history, which would have meant
+    "everything ever watched", nor the unfiltered `v1/watching/serials`
+    list, which is "every tracked serial with new episodes" regardless of
+    whether it was ever subscribed to). Each entry carries real
+    total/watched/new episode counts.
     """
     session = await refresh_if_needed(kp_session or '', session_get(kp_session))
-    payload = await kino_get(session, 'v1/watching/serials', {})
+    payload = await kino_get(session, 'v1/watching/serials', {'subscribed': 1})
     raw_items = payload.get('items') if isinstance(payload, dict) else None
     items: List[Dict[str, Any]] = []
     for raw in (raw_items or []):
         if not isinstance(raw, dict):
             continue
         item = normalize_catalog_item(raw)
+        # This list is itself the `subscribed=1` filter - the raw entries
+        # here don't carry their own `subscribed` field the way a single
+        # item's detail fetch does, so normalize_catalog_item would default
+        # it to False despite every entry being subscribed by construction.
+        item['subscribed'] = True
         item['watching_total'] = int(_plain_number(raw.get('total')) or 0)
         item['watching_watched'] = int(_plain_number(raw.get('watched')) or 0)
         item['watching_new'] = int(_plain_number(raw.get('new')) or 0)
@@ -1293,6 +1304,18 @@ async def catalog_item_vote(item_id: str, like: int = 1, kp_session: Optional[st
         'negative': int(_plain_number(payload.get('negative')) or 0),
         'rating': int(_plain_number(payload.get('rating')) or 0),
     }
+
+
+@app.post('/catalog/items/{item_id}/watchlist')
+async def catalog_item_watchlist(item_id: str, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """Toggle "Буду смотреть" tracking for a title via KinoPub's real
+    `v1/watching/togglewatchlist?id=` - flips membership in the same list
+    `/catalog/watching` (`v1/watching/serials?subscribed=1`) reads from.
+    Verified live: confirmed request/response shape and that it round-trips
+    (toggled off and back on the same item without leaving state changed)."""
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    payload = await kino_get(session, 'v1/watching/togglewatchlist', {'id': item_id})
+    return {'subscribed': bool(payload.get('watching'))}
 
 
 @app.get('/catalog/items/{item_id}/watching')

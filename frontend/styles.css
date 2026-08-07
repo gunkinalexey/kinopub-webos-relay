@@ -110,6 +110,12 @@ body.auth-locked .sidebar,body.auth-locked .content-shell{visibility:hidden;poin
 .details-screen{padding:0;background:#151a24}
 .details-back{position:absolute;left:26px;top:20px;z-index:3;border:0;border-radius:999px;padding:10px 20px;background:rgba(0,0,0,.62);color:#fff;font-size:15px}
 .details-back:hover,.details-back:focus{background:var(--green)}
+.details-watchlist{position:absolute;right:26px;top:20px;z-index:3;display:flex;align-items:center;gap:7px;border:0;border-radius:999px;padding:10px 18px;background:rgba(0,0,0,.62);color:#aeb5c4;font-size:14px;font-weight:600}
+.details-watchlist svg{width:19px;height:19px;flex:none}
+.details-watchlist:hover,.details-watchlist:focus{background:rgba(0,0,0,.8);color:#fff}
+.details-watchlist.active{color:var(--green)}
+.details-watchlist.active:hover,.details-watchlist.active:focus{background:var(--green);color:#fff}
+.details-watchlist[disabled]{opacity:.6;pointer-events:none}
 
 /* A true 16:9 backdrop: scale with the screen and frame the upper-middle,
    where posters and stills usually put faces. */

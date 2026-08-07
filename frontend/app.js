@@ -509,6 +509,27 @@ function renderVotes(item){
  upBtn.onclick=function(){castVote(1,upBtn);};
  downBtn.onclick=function(){castVote(0,downBtn);};
 }
+// "Я смотрю" toggle - KinoPub's real `v1/watching/togglewatchlist?id=`,
+// the same "Буду смотреть" flag the "Я смотрю" sidebar section filters on
+// (`v1/watching/serials?subscribed=1`). Only shown for serials, matching
+// what that section actually lists - movies aren't part of it.
+function renderWatchlistButton(item){
+ var btn=$('detailsWatchlist');if(!btn)return;
+ if(item.type!=='serial'){btn.classList.add('hidden');btn.onclick=null;return;}
+ btn.classList.remove('hidden');
+ btn.disabled=false;
+ btn.classList.toggle('active',!!item.subscribed);
+ btn.onclick=function(){
+  if(btn.disabled)return;
+  btn.disabled=true;
+  KPApi.toggleWatchlist(item.id).then(function(result){
+   item.subscribed=!!result.subscribed;
+   if(state.current&&String(state.current.id)===String(item.id))state.current.subscribed=item.subscribed;
+   btn.classList.toggle('active',item.subscribed);
+   btn.disabled=false;
+  }).catch(function(){btn.disabled=false;});
+ };
+}
 function renderDetails(item){
  state.current=item;
  $('detailsTitle').textContent=item.title||'';
@@ -516,6 +537,7 @@ function renderDetails(item){
  $('detailsBackdrop').style.background=bgCss(item.backdrop||item.poster,'backdrop',item.backdrop_fallback||item.poster);
  $('detailsPoster').style.background=bgCss(item.poster,'poster');
  renderVotes(item);
+ renderWatchlistButton(item);
  renderDetailsActions(item);
  renderDetailsEpisodes(item);
  renderDetailsTabs(item);
@@ -531,6 +553,7 @@ function openDetails(item){
  $('detailsOriginal').textContent='';
  $('detailsTabs').innerHTML='';$('detailsInfo').innerHTML='';$('detailsEpisodes').innerHTML='';
  $('detailsActions').innerHTML='';state.detailsProgress=null;loadItemProgress(item);state.detailsWatching=null;loadItemWatching(item);
+ renderWatchlistButton(item);
  $('detailsTabBody').textContent='Получаем сведения и список видео…';
  $('detailsBackdrop').style.background=bgCss(item.backdrop||item.poster,'backdrop',item.backdrop_fallback||item.poster);
  $('detailsPoster').style.background=bgCss(item.poster,'poster');

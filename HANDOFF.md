@@ -6,31 +6,20 @@ a specific past change.
 
 ## Two things left mid-conversation — check these before anything else
 
-1. **"Я смотрю" section is still wrong, blocked on the user.** Built twice
-   this session, both wrong:
-   - v1 attempt: deduped `/catalog/history` scan ("everything ever watched",
-     175 items) — user said no, wrong concept entirely.
-   - v2 attempt: `GET v1/watching/serials` (real endpoint, returns
-     `total`/`watched`/`new` per tracked series — 28 items with a real "new
-     episodes" count, currently live as `/catalog/watching` in
-     [main.py](backend/app/main.py)) — user then showed a screenshot of a
-     single card ("Stuart Fails to Save the Universe") as *the only* item
-     they expected, and it isn't even in that 28-item list. Checked: that
-     title has `subscribed:true` in KinoPub's raw item data, but
-     `v1/watching/serials` doesn't filter by `subscribed` at all (confirmed —
-     items with `subscribed:false` are in it, the one with `subscribed:true`
-     isn't). `subscribed=1`/`in_watchlist=1` query params on `v1/items` are
-     silently ignored (verified: identical `pagination.total` with and
-     without). Found the real "subscribe" action in the actual kino.watch
-     site JS (saved in `examples/ex1/.../combined-9ff94152d4.js.загружено`,
-     search for `watchlist-subscription`) — it's a **website route**
-     (`/watchlist/subscribe/{id}`, session-cookie auth), not a `v1/` REST
-     endpoint this backend's device/OAuth session can call.
-   - **User's last message**: they'll open devtools Network tab on the real
-     site's "Я смотрю" page themselves and paste back the actual request.
-     Do not guess a third endpoint — wait for that, then implement against
-     it. The current `v1/watching/serials`-based version stays live in the
-     meantime (it's real data, just possibly not *the* right list).
+1. ~~**"Я смотрю" section is still wrong, blocked on the user.**~~ **Resolved.**
+   User sent `kinoapi.com/api_watching.html` (docs page, not a DevTools
+   capture) instead. It documents `v1/watching/serials?subscribed=1` (the
+   real "Буду смотреть" filter — confirmed live, collapses the previous
+   28-item unfiltered list down to exactly the one card the user had shown,
+   "Stuart Fails to Save the Universe") and `v1/watching/togglewatchlist?id=`
+   (a real `v1/` REST endpoint, `GET`, returns `{"watching": bool}` — not the
+   session-cookie website route guessed earlier). Both verified live via
+   `/bridge/explorer` before shipping, including a round-trip toggle to
+   confirm it doesn't leave the real account's state changed. `/catalog/
+   watching` now passes `subscribed=1`; new `POST /catalog/items/{id}/
+   watchlist` wraps the toggle; a green-eye "Я смотрю" button on the serial
+   details screen (top-right, symmetric to "← Назад") calls it. See
+   `README.md` v0.9.80 (backend) for the full writeup.
 
 2. **The "4K" poster badge is probably misleading — asked the user, no
    answer yet.** Added this session (`posterBadges()` in
@@ -184,7 +173,8 @@ Versions 0.9.75 → 0.9.88 (frontend), backend 0.9.74 → 0.9.79:
     is a single file.
 13. **Sidebar wheel-scroll redirected** to the content pane — the sidebar's
     own `overflow:auto` was capturing scroll wheel input meant for the grid.
-14. **"Я смотрю" section** — see open item #1, not settled yet.
+14. **"Я смотрю" section** — resolved in a later session, see item #1 at the
+    top and README.md v0.9.80 (backend).
 15. **Browser back/forward + reload keeps your place** — `location.hash`
     only (`#route/x`, `#details/id`, `#search/mode/query`); `route()` /
     `openDetails()` / `doSearch()` push their own hash, one `hashchange`
@@ -216,7 +206,6 @@ Carried forward from before, still true unless someone's addressed them:
 New from this session:
 
 - **4K badge accuracy — see open item #2 at the top.**
-- **"Я смотрю" — see open item #1 at the top.**
 - **`v1/collections`** (real curated collections/подборки) and
   **`v1/bookmarks`** (real per-account bookmark folders — the "Закладки"
   sidebar button is still dead, no `data-route`) are both confirmed-real,
