@@ -1,13 +1,56 @@
 # Handoff — kinopub-webos-client
 
-Written 2026-08-06 to continue this work in a fresh context window. Read this
+Written 2026-08-07 to continue this work in a fresh context window. Read this
 first, then `README.md` (full changelog, newest first) if you need detail on
 a specific past change.
+
+## Two things left mid-conversation — check these before anything else
+
+1. **"Я смотрю" section is still wrong, blocked on the user.** Built twice
+   this session, both wrong:
+   - v1 attempt: deduped `/catalog/history` scan ("everything ever watched",
+     175 items) — user said no, wrong concept entirely.
+   - v2 attempt: `GET v1/watching/serials` (real endpoint, returns
+     `total`/`watched`/`new` per tracked series — 28 items with a real "new
+     episodes" count, currently live as `/catalog/watching` in
+     [main.py](backend/app/main.py)) — user then showed a screenshot of a
+     single card ("Stuart Fails to Save the Universe") as *the only* item
+     they expected, and it isn't even in that 28-item list. Checked: that
+     title has `subscribed:true` in KinoPub's raw item data, but
+     `v1/watching/serials` doesn't filter by `subscribed` at all (confirmed —
+     items with `subscribed:false` are in it, the one with `subscribed:true`
+     isn't). `subscribed=1`/`in_watchlist=1` query params on `v1/items` are
+     silently ignored (verified: identical `pagination.total` with and
+     without). Found the real "subscribe" action in the actual kino.watch
+     site JS (saved in `examples/ex1/.../combined-9ff94152d4.js.загружено`,
+     search for `watchlist-subscription`) — it's a **website route**
+     (`/watchlist/subscribe/{id}`, session-cookie auth), not a `v1/` REST
+     endpoint this backend's device/OAuth session can call.
+   - **User's last message**: they'll open devtools Network tab on the real
+     site's "Я смотрю" page themselves and paste back the actual request.
+     Do not guess a third endpoint — wait for that, then implement against
+     it. The current `v1/watching/serials`-based version stays live in the
+     meantime (it's real data, just possibly not *the* right list).
+
+2. **The "4K" poster badge is probably misleading — asked the user, no
+   answer yet.** Added this session (`posterBadges()` in
+   [app.js](frontend/app.js), driven by `item.quality` from
+   `normalize_catalog_item` in [main.py](backend/app/main.py)). Just
+   discovered: catalogue `quality` (used for the 4K-vs-HD badge decision)
+   does **not** reliably match what's actually encoded and playable.
+   Checked 23 titles the catalogue tags `quality: 2160` — **0 of 23** had an
+   actual 2160p file in `v1/items/{id}`'s raw `videos[].files[]` (confirmed
+   in the *raw* KinoPub response, before any of this backend's processing —
+   not something we're filtering out). `quality` on the list endpoint looks
+   like a "what the source was" tag, not "what's streamable". Asked the user
+   whether to (a) drop the 4K badge since it's currently never true for
+   anything checked, or (b) keep it but relabel so it doesn't promise
+   playback that won't happen. Waiting on their call.
 
 ## What this project is
 
 A lightweight KinoPub web client for LG webOS TV browsers (and desktop as a
-secondary target). FastAPI backend (`backend/app/main.py`, ~2300 lines, one
+secondary target). FastAPI backend (`backend/app/main.py`, ~2500 lines, one
 file) bridges the KinoPub API — auth, catalogue, streaming, image proxy — to
 a vanilla-JS frontend (`frontend/app.js`, one file, one closure, no build
 step, no framework). `frontend/index.html` + `styles.css` round it out.
@@ -19,15 +62,19 @@ Backend version string lives at `app = FastAPI(..., version='0.9.NN', ...)`
 in `main.py` near the top; bump it whenever `backend/` changes so `/health`
 reflects what's actually deployed.
 
+The real upstream API is `https://api.service-kp.com` (`API_BASE`), same
+family documented (patchily, and `WebFetch` reliably `ECONNRESET`s on that
+domain — use `WebSearch` instead, it works) at kinoapi.com. The built-in
+`GET /explorer?path=&query=` endpoint (backed by `safe_explorer_path`) is the
+fastest way to ground-truth a real endpoint against the live account instead
+of guessing from docs — used constantly this session, keep using it.
+
 ## Current state
 
 - Branch: `rework/audio-subtitles-details` (not merged to `main`)
-- Backend running version: **0.9.74**, containers up via `docker compose up -d`
-- `docker compose exec backend` / `curl http://localhost:8080/bridge/health`
-  to check it's alive
-- Working tree: only `.gitignore` and the new `frontend/tests/` directory are
-  uncommitted as of this handoff — the auto-commit hook (see below) will
-  pick them up after this turn ends
+- Backend running version: **0.9.79**, containers up via `docker compose up -d`
+- `curl http://localhost:8080/bridge/health` to check it's alive
+- Working tree clean — the auto-commit hook (see below) picks up every turn
 - 159 frontend checks + 17 backend smoke checks, all green (see Testing below)
 
 ## How work has been happening (read this before doing anything)
@@ -51,211 +98,189 @@ each response: `git add -A && git commit -m "checkpoint: ..."`, then if
   headless). It's kept only for manual full rebuilds. The hook uses
   `docker compose up -d --build backend` (cached, fast, no pause).
 - `examples/` (kino.watch saved pages used as ground-truth for what the real
-  site does) is gitignored — each saved page carries a live `csrf-token`
-  from the user's actual session. Never `git add -f` it.
+  site does, and — discovered this session — the real site's own bundled JS
+  with actual endpoint/route names) is gitignored — each saved page carries
+  a live `csrf-token` from the user's actual session. Never `git add -f` it.
+  Worth grepping before guessing an endpoint name: e.g.
+  `examples/ex1/.../combined-9ff94152d4.js.загружено` has the real
+  watchlist-subscribe click handler.
+
+**Docker on this machine**: `docker run`/`docker compose` are unreliable
+through the Bash tool (path-mangling on Windows — `-w /app` etc. sometimes
+resolve to a Windows path and fail). Use the **PowerShell** tool for every
+`docker`/`docker compose` call instead; it's been reliable all session.
 
 **The user communicates in Russian** and expects responses in Russian.
-They're technical, they push back if something is hand-wavy, and they've
-caught real bugs I introduced by their symptom reports alone (e.g. "no
-refresh token" → traced to a `Content-Length` mismatch, not the OAuth issue I
-initially suspected). Take symptom reports at face value, verify against the
-running server, don't assume the first plausible theory is correct.
+They're technical, push back hard when something is hand-wavy or guessed,
+and routinely catch real bugs or wrong assumptions from a single screenshot
+or terse correction (e.g. "логика не такая, вот единственное, что я должен
+был получить" — no elaboration, and it was right: the whole `/catalog/history`
+scan approach for "Я смотрю" was conceptually wrong, not just buggy). Do not
+present a guess as a finished answer — when an API shape is uncertain,
+**verify it live via `/explorer` before shipping**, the way the two open
+items above still need to be. When told something's wrong, re-derive from
+scratch rather than patching the wrong theory.
 
-## Everything that's been fixed/built, in order (see README.md for full detail)
+## Everything that's been fixed/built this session, in order (README.md has full detail, this is the map)
 
-Versions 0.9.60 → 0.9.75 (current: 0.9.74, since the last change was
-frontend-only and didn't bump the backend version — this is a minor
-inconsistency, not a bug):
+Versions 0.9.75 → 0.9.88 (frontend), backend 0.9.74 → 0.9.79:
 
-1. **Audio track switching** — was always going straight to FFmpeg remux.
-   Now a ladder: hls.js alternate-audio renditions → native
-   `video.audioTracks` → reload an alternate KinoPub HLS variant → FFmpeg
-   remux only as last resort. Fixed `audios[].index` (KinoPub's per-file
-   number, 0- or 1-based depending on payload) being fed directly into
-   `-map 0:<n>` — now addressed by *ordinal position*, matching `-map 0:a:N`.
-2. **Subtitles** — infinite `<track>`-rebuild loop (appending a `<track>`
-   fires `addtrack`, whose handler was calling back into the same rebuild
-   function). Added `::cue` CSS (there was none — subtitles rendered at
-   browser default size), wired up the `subtitle_size` setting (was
-   hardcoded to 100), per-track `shift`, language auto-selection at
-   playback start.
-3. **Codebase audit** — removed dead routes/functions, fixed a real bug
-   (remote OK key on the video timeline seeking to 00:00 because
-   `activeElement.click()` produces a synthetic event with `clientX=0`).
-4. **`play()` promise rejections** — `AbortError` from `pause()`/`load()`
-   during normal stream switching was being reported as a playback error
-   ("The play() request was interrupted..."). Now silenced unless it's a
-   genuine failure; `NotAllowedError` gets an actionable "press OK" message.
-5. **Item details panel** — rebuilt to match the real kino.watch item page
-   (poster, vote counts, tabs, characteristics table, season/episode strip),
-   turned from a modal overlay into a fourth screen (alongside
-   catalogue/search/settings) so it doesn't cover the grid.
-6. **Picture quality** — `choose_best_stream` was ranking by `abs(height -
-   1080)`, which penalized 2160p as badly as 0p, so 4K was never picked and
-   HEVC was actively deprioritized (which is where KinoPub's 10-bit/HDR
-   variants live). Rewritten to rank by resolution first, HEVC-over-H.264 at
-   equal size second. Frontend probes device capabilities
-   (`canPlayType`/`MediaSource.isTypeSupported` for HEVC, `dynamic-range`,
-   `color-gamut`) and picks the best variant the device can actually decode,
-   preferring Direct playback over hls.js/MSE for hardware-decoded HEVC
-   (MSE commonly drops HDR to SDR on webOS).
-7. **Fullscreen mode** — configurable (`layer` keeps custom controls, `video`
-   fullscreens the media element itself for the best shot at HDR
-   passthrough, `off`). Must be requested synchronously inside the click
-   handler (user-activation window closes by the time an async API call
-   resolves).
-8. **History/3D/Anime sections** — "Аниме" isn't a KinoPub content *type*,
-   it's genre id 25 (`/v1/items?type=anime` returns nothing); the site's
-   `/anime` page is a genre filter. 3D turned out to be its own real type
-   (`kino.watch/3d`), previously the "3D" link just re-routed to the plain
-   movie list. Added a working History section
-   (`GET /catalog/history`) grouped by day with a type filter — discovered
-   `v1/history`'s `type` param is silently ignored upstream (always returns
-   the same page), so the backend scans up to 20 upstream pages and filters
-   locally when a type is selected, with a 3-minute cache.
-9. **Two regressions from my own edits, both caught by the user via
-   symptom, not by me proactively**:
-   - `catalog_list` referenced a variable (`api_type`) that no longer
-     existed after a refactor → `NameError` → 500 on every catalogue
-     section. `ast.parse`/syntax checks don't catch this.
-   - `/auth/status`'s return-type annotation (`Dict[str, bool]`) wasn't
-     updated when `expires_in` (an int) was added to the response — FastAPI
-     validates responses against the annotation, so every authenticated call
-     500'd, which looked exactly like "login doesn't survive a reload."
-   - **Consequence**: added `pyflakes` (backend) and `eslint --rule no-undef`
-     (frontend) to the verification routine, and `backend/smoke_test.py` — a
-     script that boots the app with a real seeded session and hits endpoints
-     that don't need live KinoPub, specifically to catch response-model
-     mismatches like the second bug. Run it after *any* backend change:
-     ```bash
-     docker run --rm -v "$PWD/backend:/src:ro" -w /app kinopub-webos-client-backend \
-       sh -c "cp /src/smoke_test.py . && python smoke_test.py"
-     ```
-   - Separately (not a regression, a real bug found by symptom): the device
-     pairing screen never dismissed after successful pairing, and each retry
-     created a new orphaned session server-side. Cause:
-     `JSONResponse(..., headers=dict(response.headers))` copied a
-     `content-length: 0` from an injected empty `Response` object onto a
-     reply that actually carried 23 bytes of JSON — the client read zero
-     bytes, JSON parsing failed, the "authorized" branch never ran, but the
-     `Set-Cookie` had already gone out so the session *was* created
-     server-side. Fixed by setting the cookie directly on the response
-     that's actually returned.
-10. **Real 16:9 backdrops** — KinoPub's CDN serves `poster/item/wide/{id}.jpg`
-    (up to 3840×2160) alongside the usual 2:3 `medium`/`big` posters, unused
-    until now. Backdrop was being built from a stretched 250×375 poster.
-    Image proxy gained a `fallback` param (CSS `background` can't retry a
-    404) since ~a handful of items lack `wide`.
-11. **Details-screen layout reorder** — actions (Watch/Continue/Restart) and
-    the season/episode picker moved above the fold, under the title, instead
-    of being buried in the poster column / below the whole info table.
-    Continue/Restart buttons appear only when there's a genuinely mid-way
-    saved position (not first 30s, not last 60s, not `completed`); Continue
-    resumes the *specific episode* that has the saved position, not episode
-    1. Fixed a real bug found while building this: `play()` never reset
-       `playerResumePosition`, so opening a second title after watching part
-       of a first one resumed at the *first title's* timestamp. Start
-       position is now an explicit third argument: `play(item, episode,
-       startAt)`.
-12. **Season/episode selector visibility (most recent, uncommitted-by-hook
-    at time of writing)** — backend always synthesizes at least a pseudo
-    "season 1" (`entry.get('season') or 1`), so `item.seasons` was never
-    empty and a single-file movie got a one-item season picker + one-episode
-    strip it had no business having. Frontend rule is now: 2+ real seasons →
-    season pills; 1 season (real or synthesized) with 2+ episodes → flat
-    episode strip, no pills; a single file → nothing, the Watch button is
-    enough. The `S01E01`-style code on episode cards / resume labels is now
-    also gated on *genuinely* multiple seasons.
+1. **401 mid-session → device-code gate, not a raw error string.** Any
+   authenticated `KPApi` call failing with a real 401 now re-shows the same
+   pairing screen as first launch (`handleSessionExpired()`), instead of
+   leaving `{"detail": "..."}"` printed into the catalogue grid.
+2. **Catalogue page size fills whole rows** (`catalogPerPage()` reads
+   `getComputedStyle(...).gridTemplateColumns` to size to the real column
+   count, ~50 items) instead of a flat 48 that left a ragged last row.
+3. **Search suggestions dropdown**: 14 rows visible (was 10), taller
+   `max-height`.
+4. **History date bug** (biggest one): `_history_entry_item` picked `time`
+   (seconds *watched*, not a timestamp) over `last_seen` because of
+   dict-order priority in `_pick_first` — every entry showed "1 января
+   1970". Also added per-episode `S01E02 · title` tag and a real per-episode
+   frame thumbnail (`media.thumbnail`) instead of the show's poster, gated
+   behind a new setting (`history_episode_frames`, default on).
+5. **Episode carousel**, redesigned twice this session based on real
+   feedback: started as scroll-with-overlay-arrows (arrows covered the edge
+   card, stole its click), now a true paged carousel —
+   `wireEpisodeCarousel()` in [app.js](frontend/app.js) clips to whole cards
+   only via a JS-computed `max-width` (never a fraction of a card visible),
+   arrows are flex siblings sized to match the card row (not
+   `position:absolute` over it), dots below jump to a page. Episode cards
+   also now show ПРОСМОТРЕНО/ПРОДОЛЖИТЬ overlays, and the carousel
+   auto-opens on the first unwatched episode (last block if everything's
+   watched) — merges two watched-signals, see #8.
+6. **Site-wide scrollbar restyled** (thin, rounded, on-theme) instead of
+   each browser's OS default.
+7. **Poster badges made honest**: dropped the always-on "Субтитры" icon
+   (catalogue list payload has no subtitle field at all, only the
+   per-item detail fetch does — showing it was outright fabricated).
+   Dolby/HD driven by real `ac3`/`quality` fields. **The HD/4K half of this
+   is now suspect — see open item #2 above.**
+8. **`v1/watching?id=`** (per-item watched status, real cross-device data)
+   added as `GET /catalog/items/{id}/watching`, merged with local
+   `/history` progress for episode watched-marks (`episodeWatched()`) — two
+   real bugs found building this: (a) movie vs. serial shape differs
+   (`videos[]` vs `seasons[].episodes[]`) and the first version only handled
+   the movie shape; (b) `status` is `-1`/`0`/`1`, not a plain bool — `bool(-1)`
+   is `True` in Python, so the first version marked everything watched.
+9. **A real race condition**: `loadItemProgress`/`loadItemWatching`'s
+   callbacks re-rendered the episode strip using the `item` argument
+   captured at `openDetails()` call time — a summary card stub with no
+   `.seasons` — instead of `state.current` (which `renderDetails(full)`
+   upgrades to the enriched item once `KPApi.item()` resolves). Harmless
+   while local `/history` usually won the race; adding the slower
+   `/watching` call made losing it common — the strip would render
+   correctly, then blank itself out when the slow call finally returned.
+   Both functions now read `state.current`, not `item`.
+10. **Vote buttons wired to a real endpoint** — `v1/items/vote?id=&like=`,
+    exposed as `POST /catalog/items/{id}/vote`. Verified live against the
+    real API (cast an actual vote, count moved).
+11. **Details backdrop taller**, fade extends further down toward the
+    episode strip instead of cutting off right under the Watch button.
+12. **Movie resume button no longer shows "Серия 1"** — that string is a
+    backend placeholder title for a nameless media file, meant for real
+    multi-episode strips; `episodeLabel()` now suppresses it when the title
+    is a single file.
+13. **Sidebar wheel-scroll redirected** to the content pane — the sidebar's
+    own `overflow:auto` was capturing scroll wheel input meant for the grid.
+14. **"Я смотрю" section** — see open item #1, not settled yet.
+15. **Browser back/forward + reload keeps your place** — `location.hash`
+    only (`#route/x`, `#details/id`, `#search/mode/query`); `route()` /
+    `openDetails()` / `doSearch()` push their own hash, one `hashchange`
+    listener (`applyHash()`) both restores on load and reacts to
+    back/forward. `pushHash()`/`parseHash()` guard `typeof location===
+    'undefined'` — required, since `frontend/tests/*.js` call `route()` etc.
+    directly against a bare Node global with no real `location`.
 
 ## Known gaps / things flagged but not done
 
-From various turns' "what I didn't do" notes — still true unless someone's
-addressed them since:
+Carried forward from before, still true unless someone's addressed them:
 
-- **Settings that don't do anything**: `quality`'s old three-way select was
-  replaced with a real ceiling (auto/2160/1080/720, works), but
-  `audio_language` and `autoplay_next` are still saved and never read.
-  `reduce_motion` toggles a CSS class (`reduce-motion`) that doesn't exist in
-  `styles.css`.
-- **Search falls back to a mock catalogue on *any* error** (expired session,
-  network blip, real 500), not just when KinoPub is genuinely unreachable —
-  `KPApi.search` in `api.js`. An expired session currently makes search
-  silently show "Дюна"/"Оппенгеймер" instead of an auth error.
-- **Progress/"continue watching" is local-only** — `/history` (this bridge's
-  own SQLite `watch_progress` table, distinct from `/catalog/history` which
-  proxies KinoPub's real viewing history). "Continue" on the details screen
-  only works for things watched *through this client*; it doesn't read
-  KinoPub's own resume position. Could be worth reconciling if the user asks.
-- **Episode cards don't show a progress bar** on the thumbnail even though
-  the position data is already being fetched (`loadItemProgress`) — the site
-  has this, we don't yet.
-- **FFmpeg removability is still an open question** — added device/stream
-  diagnostics (`GET /media/audio-variants`, Diagnostics screen shows decoded
-  resolution, HDR/HEVC capability, fullscreen state) specifically so the
-  user can determine from real usage whether the FFmpeg remux fallback is
-  ever actually reached. Never got a definitive answer; the Dockerfile still
-  installs it (~480MB via `apt-get install ffmpeg`, no `--no-cache-dir`
-  savings possible there).
-- **`WITH_FFMPEG` build-arg config** — user asked for it once, was never
-  actually implemented (got interrupted by other more urgent bugs). If asked
-  again: add an `ARG`+conditional `RUN` in `backend/Dockerfile`, a
-  build-arg passthrough in `docker-compose.yml`, and make
-  `_ffmpeg_http_reconnect_options()`/the audio-hls endpoints degrade
-  gracefully (they already do — `FileNotFoundError` on `ffmpeg`/`ffprobe`
-  raises a clean `HTTPException(500, 'FFmpeg is not installed')` — the
-  frontend already surfaces that via `failAudioHls`, this was verified
-  working, just never wired into the Docker build itself).
-- **Backdrop `big` poster size (500×750) barely matters visually** at
-  current CSS poster-slot widths (250px) unless the viewer has DPR>1 (i.e.
-  the TV, likely) — noted to the user as an honest caveat, not fixed
-  further.
+- **Settings that don't do anything**: `audio_language` and `autoplay_next`
+  are saved and never read. `reduce_motion` toggles a CSS class that doesn't
+  exist in `styles.css`.
+- **Search falls back to a mock catalogue on *any* error**, not just
+  KinoPub-unreachable — `KPApi.search` in `api.js`.
+- **Progress/"continue watching" for the *button*, not the episode-card
+  marks, is still local-only.** (Episode-card watched marks now use real
+  `v1/watching` data too, per #8/#9 above — but the Continue button's own
+  resume position still only reads this bridge's local SQLite, never
+  KinoPub's own cross-device position.)
+- **FFmpeg removability still an open question** — never got a definitive
+  answer on whether the remux fallback is ever actually reached in real use.
+- **`WITH_FFMPEG` build-arg config** — asked for once, never implemented.
+- **Backdrop `big` poster size barely matters** at current CSS widths unless
+  DPR>1 — noted as a caveat, not fixed.
+
+New from this session:
+
+- **4K badge accuracy — see open item #2 at the top.**
+- **"Я смотрю" — see open item #1 at the top.**
+- **`v1/collections`** (real curated collections/подборки) and
+  **`v1/bookmarks`** (real per-account bookmark folders — the "Закладки"
+  sidebar button is still dead, no `data-route`) are both confirmed-real,
+  unused endpoints, found during the API survey that led to items #1/#8.
+  Not requested yet, but the user may come back to either.
+- **`v1/tv`** is a real live-TV-channel list (m3u8 streams, includes actual
+  sport channels — ESPN, Eurosport, Fox Sports, TNT Sport UHD). The "Спорт"
+  sidebar section is still just a VOD catalogue filter, not this. User was
+  told this exists; hasn't asked for it to be built yet.
 
 ## Testing infrastructure
 
-**Frontend**: `frontend/tests/` (just checked into the repo this turn — it
-previously only existed in a session-scoped scratchpad and would have been
-lost). Eight plain Node scripts, no framework — `frontend/app.js` is a
-single IIFE with no module boundary, so each test file `eval`s the real
-source with the closing `}());` swapped to also expose the functions under
-test on `global.__app`. Four use hand-rolled DOM stubs (fast, no deps); four
-(`sections.js`, `actions.js`, `episodes.js`, `panel.js`) load the real
-`index.html` into `jsdom` for structural assertions. See
-`frontend/tests/README.md` for the exact run recipe — no local Node is
-installed on this machine, everything ran through `node:20-alpine` in
-Docker. **159 checks, 0 failures** as of this handoff; run them after any
-`frontend/app.js` change.
-
-**Backend**: `backend/smoke_test.py` (already committed pre-handoff). Boots
-the real FastAPI app with `fastapi.testclient.TestClient` against a
-temp SQLite DB with one seeded "authenticated" session row, hits every
-endpoint that doesn't require a live KinoPub connection. Specifically
-designed to catch response-model/annotation mismatches (see bug #9 above) —
-`raise_server_exceptions=False` so a 500 shows up as a normal FAIL instead of
-aborting the whole run. **17 checks, 0 failures**. Run via:
-```bash
-docker run --rm -v "$PWD/backend:/src:ro" -w /app kinopub-webos-client-backend \
-  sh -c "cp /src/smoke_test.py . && python smoke_test.py"
+**Frontend**: `frontend/tests/`, eight plain Node scripts, no framework —
+`frontend/app.js` is a single IIFE with no module boundary, so each test
+file `eval`s the real source with the closing `}());` swapped to also expose
+functions under test on `global.__app`. Four use hand-rolled DOM stubs
+(fast, no deps); four (`sections.js`, `actions.js`, `episodes.js`,
+`panel.js`) load the real `index.html` into `jsdom`. See
+`frontend/tests/README.md` for the run recipe. **159 checks, 0 failures**.
+Run via (PowerShell, not Bash — see Docker note above):
 ```
+docker run --rm -v "D:\pets\kinopub-webos-client\frontend:/f:ro" -w /tmp node:20-alpine sh -c "cp -r /f /tmp/frontend && cd /tmp/frontend/tests && npm install --silent >/dev/null 2>&1 && node harness.js ../app.js && node subs.js ../app.js && node misc.js ../app.js && node quality.js ../app.js && node sections.js ../app.js && node actions.js ../app.js && node episodes.js ../app.js && node panel.js ../app.js"
+```
+Also run `node --check app.js` and, ideally,
+`npx eslint --no-eslintrc --env browser,es2020 --parser-options=ecmaVersion:2020 --rule '{"no-undef":"error"}' app.js`
+(install eslint@8 into the same throwaway container) after any change —
+caught real bugs this session (e.g. a wrapper IIFE accidentally matching the
+test harness's `}());`-replace trick, silently truncating instrumented code).
+
+**Backend**: `backend/smoke_test.py`. Boots the real FastAPI app with a
+seeded SQLite session, hits every endpoint that doesn't need live KinoPub.
+**17 checks, 0 failures**. Run via:
+```
+docker run --rm -v "D:\pets\kinopub-webos-client\backend:/src:ro" -w /app kinopub-webos-client-backend sh -c "cp /src/smoke_test.py . && rm -rf /app/app && cp -r /src/app /app/app && python smoke_test.py"
+```
+Also run `python -m py_compile` on a copy of `app/` (the mounted `:ro` volume
+can't write `__pycache__` in place) before that, since no `pyflakes` install
+is reachable in this sandbox (no network egress to PyPI) — `py_compile` at
+least catches syntax errors.
 
 **Both are ad-hoc verification scripts that accumulated over many turns, not
-a designed test suite.** They're worth extending in the same spirit (small,
-targeted, reads the real source) rather than replaced with a framework,
-unless the user asks for that explicitly.
+a designed test suite.** Extend in the same spirit rather than replace with
+a framework, unless asked.
 
 ## If you're picking this up cold, do this first
 
-1. `cd D:/pets/kinopub-webos-client && git log --oneline -5` and
+1. **Read the two open items at the very top of this file first** — one is
+   fully blocked on the user (don't guess a third "Я смотрю" endpoint), one
+   just needs their answer relayed into a small code change.
+2. `cd D:/pets/kinopub-webos-client && git log --oneline -5` and
    `curl http://localhost:8080/bridge/health` — confirm what's actually
-   running vs. what's in git (the checkpoint hook should keep these in
-   sync, but verify).
-2. Skim `README.md` top-to-bottom (newest-first) for the fuller story behind
-   any of the summary bullets above.
-3. If touching `frontend/app.js`: run the suite in `frontend/tests/` before
-   and after your change (see that dir's README for the exact command) —
-   most past regressions were single-string-replace mistakes (wrong match
-   count, shadowed variable, stale reference) that the suite catches
-   immediately.
-4. If touching `backend/app/main.py`: run `pyflakes`, then
-   `backend/smoke_test.py`, then bump the version string and let the hook
-   rebuild — or `docker compose up -d --build backend` yourself if you want
-   to see the rebuild output.
+   running vs. what's in git.
+3. Skim `README.md` top-to-bottom (newest-first) for fuller detail behind
+   any bullet above.
+4. If touching `frontend/app.js`: run the suite in `frontend/tests/` before
+   and after (see Testing above) — most regressions this session were
+   single-string-replace mistakes or a stale variable captured across an
+   async boundary (see item #9 above), not logic errors the tests can't see.
+5. If touching `backend/app/main.py`: `py_compile`, then
+   `backend/smoke_test.py`, then bump the version string and rebuild via
+   PowerShell (`docker compose up -d --build backend`) — verify
+   `/bridge/health` actually reports the new version before calling it done.
+6. When an API shape is uncertain, use `GET /bridge/explorer?path=&query=`
+   against the live account before writing code against a guess — it's
+   faster and more reliable than the docs site, and this session's biggest
+   mistakes (both open items) came from acting on a plausible-looking guess
+   instead of checking first.
