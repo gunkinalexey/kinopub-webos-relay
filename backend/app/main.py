@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.88', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.89', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -161,16 +161,29 @@ class SettingsPayload(BaseModel):
     # is what usually promotes it to the hardware video plane (and with it HDR
     # passthrough), at the cost of replacing the custom controls with native ones.
     player_fullscreen: str = 'layer'
+    # auto | tv | h264. What to declare to KinoPub as this device's decoding
+    # ability (see /device/capabilities). 'auto' trusts the browser's own
+    # probes where they answer at all; 'tv' asserts HEVC+4K+HDR outright, for
+    # a TV whose browser under-reports itself; 'h264' is the escape hatch for
+    # a browser that genuinely cannot decode HEVC and wants a playable list.
+    # One device record is shared by every browser on this bridge, so this is
+    # also how you stop a desktop visit from re-declaring the TV.
+    device_profile: str = 'auto'
 
 
 class CapabilitiesPayload(BaseModel):
     """What the browser reports it can actually decode/display.
 
     Drives KinoPub's per-device file selection (see /device/capabilities).
+
+    Tri-state on purpose: ``None`` means "this browser did not answer", which
+    is a different thing from ``False`` and must never be written to KinoPub
+    as a 0. Defaulting these to ``False`` is what took HEVC (and with it 4K,
+    direct playback and HDR) away from the TV - see the endpoint's docstring.
     """
-    hevc: bool = False
-    uhd: bool = False
-    hdr: bool = False
+    hevc: Optional[bool] = None
+    uhd: Optional[bool] = None
+    hdr: Optional[bool] = None
 
 
 class ProgressPayload(BaseModel):
@@ -1844,6 +1857,16 @@ async def device_capabilities(payload: CapabilitiesPayload, kp_session: Optional
 
     Written only when a flag actually differs, so the common case is one
     read and no write.
+
+    **A flag the browser could not determine (``None``) is left alone.** The
+    first version coerced every field to ``bool``, so "did not answer" landed
+    on KinoPub as an explicit 0 - and `supportHevc=0` makes KinoPub serve a
+    h264-only ladder for every title (verified live, see the matrix above),
+    which removes the HEVC file, and with it the HDR file and any reason to
+    play direct at all. On top of that a single device record is shared by
+    every browser that talks to this bridge, so a desktop visit could quietly
+    strip the TV's capabilities. Both failures are the same mistake: writing
+    a negative that nobody actually asserted.
     """
     session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     info = await kino_get(session, 'v1/device/info', {})
@@ -1852,16 +1875,55 @@ async def device_capabilities(payload: CapabilitiesPayload, kp_session: Optional
         device = {}
     device_id = device.get('id')
     settings = device.get('settings') if isinstance(device.get('settings'), dict) else {}
-    desired = {
-        'supportHevc': bool(payload.hevc),
-        'support4k': bool(payload.uhd),
-        'supportHdr': bool(payload.hdr),
+    known = {
+        'supportHevc': payload.hevc,
+        'support4k': payload.uhd,
+        'supportHdr': payload.hdr,
     }
+    desired = {name: bool(value) for name, value in known.items() if value is not None}
+    skipped = sorted(name for name, value in known.items() if value is None)
     changed = {name: value for name, value in desired.items() if _device_flag(settings, name) != value}
     if device_id and changed:
         await kino_post(session, f'v1/device/{device_id}/settings', changed)
         log_event('device', 'Device capabilities updated', {'device_id': device_id, 'changed': changed})
-    return {'device_id': device_id, 'applied': desired, 'changed': sorted(changed)}
+    current = {name: _device_flag(settings, name) for name in known}
+    current.update(desired)
+    return {
+        'device_id': device_id, 'applied': desired, 'skipped': skipped,
+        'changed': sorted(changed), 'current': current,
+    }
+
+
+@app.get('/device/state')
+async def device_state(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """The capability flags KinoPub currently holds for this device.
+
+    Read-only counterpart to `/device/capabilities`, for the diagnostics
+    screen. These flags decide which files the API offers, and the last time
+    they went wrong it cost a session to work out that the answer had been
+    sitting in `v1/device/info` the whole time - so the player now shows them
+    next to the browser's own probe results, on the TV itself.
+    """
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    info = await kino_get(session, 'v1/device/info', {})
+    device = info.get('device') if isinstance(info, dict) else {}
+    if not isinstance(device, dict):
+        device = {}
+    settings = device.get('settings') if isinstance(device.get('settings'), dict) else {}
+    streaming = settings.get('streamingType') if isinstance(settings.get('streamingType'), dict) else {}
+    selected = ''
+    for entry in streaming.get('value') or []:
+        if isinstance(entry, dict) and entry.get('selected'):
+            selected = str(entry.get('label') or '')
+            break
+    return {
+        'device_id': device.get('id'),
+        'title': device.get('title'),
+        'software': device.get('software'),
+        'flags': {name: _device_flag(settings, name)
+                  for name in ('supportHevc', 'support4k', 'supportHdr', 'supportSsl')},
+        'streaming_type': selected,
+    }
 
 
 @app.get('/auth/status')

@@ -27,9 +27,15 @@ Object.assign(video,{paused:false,ended:false,currentTime:0,duration:7200,readyS
   pause(){this.paused=true;},play(){this.paused=false;return Promise.resolve();},
   canPlayType(m){ return (global.DEVICE.canPlay||{})[m] || ''; }});
 
+// Faithful `matchMedia`: a media feature the browser has never heard of does
+// not answer "false", it serialises to `not all`. Real webOS browsers predate
+// `(dynamic-range: high)` entirely, and collapsing that into `matches===false`
+// is what let the app report "no HDR" for an HDR TV. DEVICE.media lists the
+// queries this device understands; anything else is unknown.
 global.window={KP_BACKEND:'/bridge',
   get MediaSource(){ return global.DEVICE.mse ? {isTypeSupported:m=>!!global.DEVICE.mse[m]} : undefined; },
-  matchMedia:q=>({matches:!!(global.DEVICE.media||{})[q]})};
+  matchMedia:q=>{const known=global.DEVICE.media||{};
+    return Object.prototype.hasOwnProperty.call(known,q)?{matches:!!known[q],media:q}:{matches:false,media:'not all'};}};
 global.matchMedia = global.window.matchMedia;
 Object.defineProperty(global,'MediaSource',{get(){return global.window.MediaSource;},configurable:true});
 global.screen={width:3840,height:2160}; global.navigator={userAgent:'webOS'};
@@ -49,8 +55,15 @@ global.KPApi={status:()=>new Promise(()=>{}),settings:()=>new Promise(()=>{}),pr
 // Probe strings the app actually asks about. Level is part of the question:
 // L120/L4.0 are the 1080p-capable levels, L150/L5.1 the 2160p ones, so a
 // device can answer yes to one and no to the other.
+//
+// The app asks each family in several spellings and takes the best answer,
+// because webOS firmwares disagree about which spelling they understand.
+// These are the ones the tests answer with; a device that only knows the
+// bare `hvc1` form is exercised by BARE_HEVC_ONLY below.
 const HEVC='video/mp4; codecs="hvc1.1.6.L120.B0"', HEVC4K='video/mp4; codecs="hvc1.1.6.L150.B0"';
+const HEVC_BARE='video/mp4; codecs="hvc1"';
 const H264='video/mp4; codecs="avc1.640028"', H2644K='video/mp4; codecs="avc1.640033"';
+const HDR_Q='(dynamic-range: high)', P3_Q='(color-gamut: p3)';
 global.DEVICE={};
 
 const src=fs.readFileSync(process.argv[2],'utf8');
@@ -89,7 +102,7 @@ const UHD_HEVC={canPlay:{[HEVC]:'probably',[HEVC4K]:'probably',[H264]:'probably'
 const dev=extra=>Object.assign({},UHD_HEVC,extra||{});
 
 console.log('--- LG NanoCell: HEVC in hardware, HDR panel ---');
-setup(dev({media:{'(dynamic-range: high)':true,'(color-gamut: p3)':true}}));
+setup(dev({media:{[HDR_Q]:true,[P3_Q]:true}}));
 check('picks 2160p HEVC', picked(), '2160p HDR hevc');
 check('hands the file to the TV decoder, not MSE', app.mode(app.group()), 'direct');
 check('reports the HDR panel', app.caps().hdrDisplay, true);
@@ -110,13 +123,52 @@ check('MSE-only HEVC still counts as HEVC support', app.reported().hevc, true);
 
 console.log('--- HEVC at 1080p but not at 4K level ---');
 setup({canPlay:{[HEVC]:'probably',[H264]:'probably'},mse:{[HEVC]:true,[H264]:true},media:{}});
-check('reports HEVC yes, 4K no', app.reported(), {hevc:true,uhd:false,hdr:false});
+// `hdr:true` with no HDR query answered is deliberate, not sloppiness: this
+// bridge's KinoPub device record describes an LG TV, the query that would
+// settle it does not exist in these browsers, and toggling `supportHdr` was
+// verified live not to change the file list. Claiming it costs nothing;
+// declining to claim it is what took HDR away.
+check('reports HEVC yes, 4K no, HDR assumed', app.reported(), {hevc:true,uhd:false,hdr:true});
 
-console.log('--- nothing decodable at all: still offer something, do not go silent ---');
+// The device record on KinoPub is one per bridge, not one per browser. A
+// desktop browser answers `(dynamic-range: high)` honestly - "this monitor is
+// SDR" - and writing that would take HDR away from the TV that shares the
+// record. Observed live while fixing this. So a negative is passed as null
+// (leave the flag as it is), never as false.
+setup({canPlay:{[HEVC]:'probably',[H264]:'probably'},mse:{[HEVC]:true,[H264]:true},media:{[HDR_Q]:false}});
+check('an SDR monitor does not strip the TV\'s HDR flag', app.reported().hdr, null);
+setup({canPlay:{[HEVC]:'probably',[H264]:'probably'},mse:{[HEVC]:true,[H264]:true},media:{[HDR_Q]:true}});
+check('an HDR display still asserts it', app.reported().hdr, true);
+
+// The regression this whole section exists for. A webOS browser can answer
+// '' to every parameterised codec string on hardware that decodes the file
+// in a heartbeat; the old code read that silence as "no HEVC", told KinoPub
+// so, and KinoPub then served an h264-only ladder for every title - no HEVC
+// file, therefore no HDR file, therefore nothing worth playing direct.
+console.log('--- a browser whose canPlayType answers nothing at all ---');
 setup({canPlay:{},mse:{},media:{}});
 check('falls back to the largest variant rather than the smallest', picked(), '2160p HDR hevc');
-check('every entry is kept, each marked unsupported', app.qualityMenu().length, 3);
-check('and they say so', /не поддерживается/.test(app.qualityMenu()[0]), true);
+check('every entry is still offered', app.qualityMenu().length, 3);
+check('and none is written off as unsupported', /не поддерживается/.test(app.qualityMenu().join(' ')), false);
+check('does not tell KinoPub "no HEVC" on no evidence', app.reported(), {hevc:null,uhd:null,hdr:true});
+check('and still tries direct, the only transport that carries HDR', app.mode(app.group()), 'direct');
+
+// A firmware that only recognises the bare form must not read as "no HEVC".
+console.log('--- HEVC declared only under the bare `hvc1` spelling ---');
+setup({canPlay:{[HEVC_BARE]:'probably',[H264]:'probably',[H2644K]:'probably'},
+       mse:{[H264]:true},media:{[HDR_Q]:true}});
+check('the bare spelling counts as HEVC support', app.reported().hevc, true);
+check('picks the HEVC variant', picked(), '2160p HDR hevc');
+check('and plays it direct', app.mode(app.group()), 'direct');
+
+// The user-facing escape hatch: when probing cannot be trusted at all, the
+// setting decides, and nothing the browser says overrides it.
+console.log('--- explicit device profile overrides every probe ---');
+setup({canPlay:{[H264]:'probably'},mse:{[H264]:true},media:{[HDR_Q]:false}},{device_profile:'tv'});
+check('"Телевизор" asserts HEVC/4K/HDR regardless', app.reported(), {hevc:true,uhd:true,hdr:true});
+check('and picks the HEVC variant a bare probe would have hidden', picked(), '2160p HDR hevc');
+setup(dev({media:{[HDR_Q]:true}}),{device_profile:'h264'});
+check('"Только H.264" gives up HEVC even on a capable device', app.reported(), {hevc:false,uhd:false,hdr:false});
 
 console.log('--- quality ceiling from settings ---');
 setup(dev(),{quality:'1080'});

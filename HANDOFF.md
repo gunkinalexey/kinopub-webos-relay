@@ -9,26 +9,39 @@ a specific past change.
 None blocking. Nothing is mid-conversation or waiting on the user right now.
 Two things worth knowing about on pickup:
 
-1. **HDR-on-direct-playback is unresolved, real-TV verification pending.**
-   User reported HDR that used to work in this exact app on this exact LG TV
-   stopped working. Traced to a real regression: `watchDirectStall()`
-   (added this session to fix a *different* bug — "Продолжить" hanging
-   forever on a resumed byte-range request into a large file) used one
-   fixed 12s deadline with no way to tell "stuck forever" from "slow but
-   working" apart, and was yanking a merely-slow-starting direct/HDR-capable
-   4K stream over to relay/HLS (which drops HDR on webOS via MSE). Fixed:
-   the watchdog now listens for `progress` events and only gives up if
-   truly zero bytes ever arrive (60s hard ceiling). Verified the file itself
-   is genuine, fully-tagged HDR10 via `ffprobe` directly against the CDN URL
-   (`color_transfer: smpte2084`, `color_primaries: bt2020`, both
-   `Mastering display metadata` and `Content light level metadata` side-data
-   present) — this was never a content/codec problem. Live re-testing in
-   this sandbox showed **inconsistent** direct-vs-fallback outcomes on
-   repeated attempts against the same title, which may just be this
-   sandbox's own network path to KinoPub's CDN, not the fix's fault.
-   **Needs a real-TV retest** — ask the user whether HDR actually comes back
-   now. See README.md's regression writeup ("Регресс: сторож зависания...")
-   for the full trace.
+1. **HDR/direct root cause found and fixed; real-TV retest still pending.**
+   The previous handoff blamed `watchDirectStall()` for this. That was
+   wrong — the watchdog change shipped and the user came back with the same
+   report ("не запускается direct и не цепляется hdr"). The actual cause was
+   the device-capability reporting that landed in the same stretch (item #9
+   below): probes that could not answer were written to KinoPub as explicit
+   negatives. `supportHevc=0` makes KinoPub serve an h264-only ladder for
+   every title — **verified live by toggling the flag and re-reading
+   `v1/items/100468`** — so no HEVC file, no HDR file, and nothing for
+   `preferredModeFor` to play direct with. Compounded by one KinoPub device
+   record being shared by every browser on the bridge: a desktop visit
+   stripping the TV's `supportHdr` was **reproduced live** during the fix.
+   Fixed in backend 0.9.89 — multi-spelling codec probes, a real "unknown"
+   state that never becomes "no", `Optional[bool]` on the backend so unknown
+   flags are left alone, direct no longer vetoed by a single `canPlayType`
+   string, plus a "Возможности устройства" setting (auto / TV / H.264-only)
+   and diagnostics that show KinoPub's actual device flags via the new
+   `GET /device/state`. See README's "Direct и HDR: приложение само отбирало
+   их у телевизора" for the full trace and the flag matrix.
+   **The device profile is currently set to "Телевизор"** on the user's
+   account, which pins HEVC+4K+HDR regardless of what the TV's browser
+   says. Still needs the user to confirm HDR is actually back on the TV; if
+   it is not, the Diagnostics screen now answers the next question directly
+   (`KinoPub: HEVC` and `Текущий вариант`/`Полный экран` rows), so ask for
+   that screen rather than guessing. The file itself was already confirmed
+   genuine HDR10 via `ffprobe` against the CDN URL (`color_transfer:
+   smpte2084`, `color_primaries: bt2020`, both mastering-display and
+   content-light-level side data) — never a content problem.
+   Note: **direct playback cannot be reproduced in this sandbox** — the
+   browser pane's network path to `*.cdntogo.net` hangs indefinitely
+   (`readyState 0`, no bytes, fetch times out), while the exact same URL
+   returns `206 Partial Content` from the host and from the backend
+   container. Do not read a sandbox direct-playback failure as a bug.
 2. **"Новые эпизоды" sidebar link is still dead, deliberately deferred.**
    Not blocked on guessing — kino.watch's own page for it
    (`/media/new-serial-episodes?type=serial|docuserial|tvshow`) is a
@@ -56,7 +69,7 @@ read-only — **frontend changes are live immediately, no rebuild**.
 
 Backend version string lives at `app = FastAPI(..., version='0.9.NN', ...)`
 in `main.py` near the top; bump it whenever `backend/` changes so `/health`
-reflects what's actually deployed. **Currently: backend 0.9.88.**
+reflects what's actually deployed. **Currently: backend 0.9.89.**
 
 The real upstream API is `https://api.service-kp.com` (`API_BASE`). Docs at
 kinoapi.com are patchy and the domain is **intermittently unreachable via
@@ -73,13 +86,13 @@ inside the backend container instead (see "Verifying live" below).
 ## Current state
 
 - Branch: `rework/audio-subtitles-details` (not merged to `main`)
-- Backend running version: **0.9.88**, containers up via `docker compose up -d`
+- Backend running version: **0.9.89**, containers up via `docker compose up -d`
 - `curl http://localhost:8080/bridge/health` to check it's alive
 - Working tree has uncommitted changes at handoff time — the auto-commit
   hook (see below) picks them up at the end of the current turn if this
   handoff is being read mid-session; if you're starting fresh, they're
   probably already committed.
-- **223 frontend checks + 17 backend smoke checks, all green** (see Testing
+- **233 frontend checks + 21 backend smoke checks, all green** (see Testing
   below)
 
 ## How work has been happening (read this before doing anything)
@@ -148,8 +161,15 @@ an honest smaller filter panel than a bigger one with dead switches.
 
 ## Everything fixed/built, most recent first (README.md has full prose, this is the map)
 
-Backend 0.9.79 → 0.9.88 this stretch, frontend tests 159 → 223:
+Backend 0.9.79 → 0.9.89 this stretch, frontend tests 159 → 233:
 
+16. **Direct/HDR: the app was declaring the TV incapable and KinoPub believed
+    it.** See open item #1 — this is the real fix for the report item #14
+    below only appeared to close. Capability probes now have an "unknown"
+    state that never degrades into "no", `/device/capabilities` leaves
+    unknown flags untouched, direct is no longer vetoed by one `canPlayType`
+    string, and there is an explicit "Возможности устройства" setting plus a
+    `GET /device/state` diagnostics row showing KinoPub's real flags.
 15. **Filter panel: real fields only, year became a range, Anime genre bug fixed.**
     The stub panel (six `<select>` each with one "Любые" option, zero
     wiring) is now real: Жанр (`v1/genres?type=`, type-scoped per section —
@@ -171,8 +191,14 @@ Backend 0.9.79 → 0.9.88 this stretch, frontend tests 159 → 223:
     doesn't even offer a Genre picker on that section. Filter button itself
     is now hidden entirely on "Я смотрю" and "Спорт" (neither comes from
     `v1/items`, so it never did anything there either).
-14. **Regression: an over-eager stall watchdog was silently killing HDR.**
-    See open item #1 above — not fully closed, needs real-TV confirmation.
+14. **An over-eager stall watchdog — a real bug, but *not* the HDR one it was
+    blamed for.** `watchDirectStall()` really did have one fixed 12s deadline
+    with no way to tell "stuck forever" from "slow but working", and now
+    extends its window on any `progress` event (60s ceiling). Worth keeping.
+    But it was diagnosed as the cause of the missing HDR on the strength of
+    plausibility, not evidence, and it wasn't — see item #16. Kept in the map
+    as a reminder of how that went: the symptom was re-reported unchanged
+    after this shipped.
 13. **"Закладки" folder-count/grid mismatch (real KinoPub duplicate, not a bug in extraction).**
     A folder said "5 тайтлов", grid showed 4. Root cause: KinoPub's own
     folder data really did contain the same title twice (verified live via

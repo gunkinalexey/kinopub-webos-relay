@@ -840,22 +840,122 @@ state.playerStreams=groups;state.playerSubtitles=firstNonEmptyList(result.subtit
 // perfectly well decode 1080p HEVC and still refuse 4K, so probing only a
 // 4K-level string would under-report HEVC, and probing only a 1080p one
 // would over-report 4K. Both are asked separately.
-var HEVC_MIME='video/mp4; codecs="hvc1.1.6.L120.B0"',HEVC_4K_MIME='video/mp4; codecs="hvc1.1.6.L150.B0"';
-var H264_MIME='video/mp4; codecs="avc1.640028"',H264_4K_MIME='video/mp4; codecs="avc1.640033"';
-function probeCodec(mime){var el='',mse=false;try{el=video.canPlayType(mime)||'';}catch(e){}try{mse=!!(window.MediaSource&&MediaSource.isTypeSupported&&MediaSource.isTypeSupported(mime));}catch(e){}return {native:el==='probably'||el==='maybe',mse:mse,answer:el||'нет'};}
-function mediaCapabilities(){if(state.mediaCaps)return state.mediaCaps;var hevc=probeCodec(HEVC_MIME),hevc4k=probeCodec(HEVC_4K_MIME),h264=probeCodec(H264_MIME),h2644k=probeCodec(H264_4K_MIME),hdr=false,gamut=false;try{hdr=!!(window.matchMedia&&(matchMedia('(dynamic-range: high)').matches||matchMedia('(video-dynamic-range: high)').matches));}catch(e){}try{gamut=!!(window.matchMedia&&matchMedia('(color-gamut: p3)').matches);}catch(e){}state.mediaCaps={hevc:hevc,hevc4k:hevc4k,h264:h264,h2644k:h2644k,hdrDisplay:hdr,wideGamut:gamut};return state.mediaCaps;}
+//
+// One spelling of a codec string is not a probe, it is a coin flip. webOS
+// browsers routinely answer '' to a fully parameterised string
+// (`hvc1.1.6.L120.B0`) on hardware that plays HEVC all day, and answer the
+// bare `hvc1` form instead; which spellings a given firmware understands is
+// not knowable in advance. So every family is asked in several spellings and
+// the best answer wins - one 'probably' anywhere is support.
+var HEVC_MIMES=['video/mp4; codecs="hvc1.1.6.L120.B0"','video/mp4; codecs="hev1.1.6.L120.B0"','video/mp4; codecs="hvc1.2.4.L120.B0"','video/mp4; codecs="hvc1"','video/mp4; codecs="hev1"'];
+var HEVC_4K_MIMES=['video/mp4; codecs="hvc1.1.6.L150.B0"','video/mp4; codecs="hev1.1.6.L150.B0"','video/mp4; codecs="hvc1.2.4.L153.B0"'];
+var H264_MIMES=['video/mp4; codecs="avc1.640028"','video/mp4; codecs="avc1.42E01E"'];
+var H264_4K_MIMES=['video/mp4; codecs="avc1.640033"','video/mp4; codecs="avc1.640032"'];
+function probeCodec(mimes){
+ var best='',mse=false;
+ for(var i=0;i<mimes.length;i++){
+  var answer='';
+  try{answer=video.canPlayType(mimes[i])||'';}catch(e){}
+  if(answer==='probably'||(answer==='maybe'&&best!=='probably'))best=answer;
+  try{if(window.MediaSource&&MediaSource.isTypeSupported&&MediaSource.isTypeSupported(mimes[i]))mse=true;}catch(e){}
+ }
+ return {native:best==='probably'||best==='maybe',mse:mse,answer:best||'нет'};
+}
+// A media query has three possible answers too, and `.matches` collapses two
+// of them. A feature the browser has never heard of parses to `not all`, and
+// `matches` is then false - indistinguishable from a browser that understands
+// the question and answers no. `(dynamic-range: high)` is Chromium 98+ /
+// Safari 13.1+, i.e. newer than the browser in most webOS TVs, so on the very
+// devices this app targets `matches===false` means "never heard of it".
+// Returns true / false / null, and null is never allowed to become false.
+function mediaQueryAnswer(query){
+ try{
+  if(!window.matchMedia)return null;
+  var mq=matchMedia(query);
+  if(!mq)return null;
+  if(mq.media&&String(mq.media).replace(/\s+/g,' ').toLowerCase().indexOf('not all')===0)return null;
+  return !!mq.matches;
+ }catch(e){return null;}
+}
+function firstAnswer(queries){for(var i=0;i<queries.length;i++){var a=mediaQueryAnswer(queries[i]);if(a!==null)return a;}return null;}
+function mediaCapabilities(){if(state.mediaCaps)return state.mediaCaps;
+ var hevc=probeCodec(HEVC_MIMES),hevc4k=probeCodec(HEVC_4K_MIMES),h264=probeCodec(H264_MIMES),h2644k=probeCodec(H264_4K_MIMES);
+ var hdr=firstAnswer(['(dynamic-range: high)','(video-dynamic-range: high)']);
+ var gamut=firstAnswer(['(color-gamut: p3)']);
+ state.mediaCaps={hevc:hevc,hevc4k:hevc4k,h264:h264,h2644k:h2644k,hdrDisplay:hdr===true,hdrAnswer:hdr,wideGamut:gamut===true,gamutAnswer:gamut};
+ return state.mediaCaps;}
 function codecSupported(caps,isHevc){var probe=isHevc?caps.hevc:caps.h264;return !!(probe&&(probe.native||probe.mse));}
+// Is this browser's `canPlayType` worth listening to at all? Every browser
+// that ships a <video> element decodes H.264 - that is the one answer we can
+// check against reality. A browser that will not even admit to H.264 has a
+// decorative `canPlayType` (some webOS builds), and its silence about HEVC is
+// not evidence of anything. Everything below that turns a probe into a
+// decision goes through this first.
+function codecProbesTrustworthy(caps){return !!(caps&&caps.h264&&(caps.h264.native||caps.h264.mse));}
+// Definite "this device cannot decode HEVC", as opposed to "did not say".
+function hevcRefused(caps){return codecProbesTrustworthy(caps)&&!caps.hevc.native&&!caps.hevc.mse;}
 // KinoPub decides which files to even offer from the device's declared
 // support flags (verified live - see /device/capabilities in main.py), so
 // these must describe the real browser, not a hopeful `true`.
-function reportedCapabilities(){var caps=mediaCapabilities();var uhd=!!((caps.hevc4k.native||caps.hevc4k.mse)||(caps.h2644k.native||caps.h2644k.mse));return {hevc:codecSupported(caps,true),uhd:uhd,hdr:!!caps.hdrDisplay};}
+//
+// But "not a hopeful true" is not the same as "a confident false", and the
+// first version of this conflated them - which is what silently killed HEVC,
+// direct playback and HDR on the TV. Each flag is now true / false / null,
+// and null (the browser did not answer) is sent as null, which the backend
+// leaves untouched rather than writing a 0. This matters twice over:
+//
+//  - `supportHevc=0` makes KinoPub serve h264 only, for every title
+//    (verified live: hevc=1 -> 2160p/1080p/720p/480p h265, hevc=0 -> the
+//    same ladder in h264). No HEVC file means no HDR file and no reason to
+//    play direct, so one unanswered codec question took out both features.
+//  - one KinoPub device record is shared by every browser that uses this
+//    bridge, so a desktop visit used to overwrite whatever the TV declared.
+//
+// HDR is handled apart from the other two: in `auto` this never reports HDR
+// as *absent*, it either asserts it or leaves the flag alone. Three facts
+// force that. `(dynamic-range: high)` does not exist in the browsers in these
+// TVs, so "no" there is really "no idea". The record describes an LG TV, and
+// toggling `supportHdr` was verified live not to change the file list for any
+// of 25 4K titles - asserting it costs nothing. And a desktop browser *does*
+// answer the query, truthfully saying its monitor is SDR - which, on a device
+// record shared with the TV, would strip the TV's HDR flag on every visit
+// (watched happen, live, mid-fix). A desktop that genuinely wants an SDR
+// h264 list asks for it with the 'h264' profile instead.
+function capabilityProfile(){var raw=state.settings&&state.settings.device_profile;return raw==='tv'||raw==='h264'?raw:'auto';}
+function reportedCapabilities(){
+ var profile=capabilityProfile();
+ if(profile==='tv')return {hevc:true,uhd:true,hdr:true};
+ if(profile==='h264')return {hevc:false,uhd:false,hdr:false};
+ var caps=mediaCapabilities(),trusted=codecProbesTrustworthy(caps);
+ function flag(yes){return yes?true:(trusted?false:null);}
+ return {
+  hevc:flag(caps.hevc.native||caps.hevc.mse),
+  uhd:flag(caps.hevc4k.native||caps.hevc4k.mse||caps.h2644k.native||caps.h2644k.mse),
+  hdr:caps.hdrAnswer===false?null:true
+ };
+}
 function syncDeviceCapabilities(){var caps=reportedCapabilities();return KPApi.reportCapabilities(caps).then(function(res){state.deviceCaps=res;return res;}).catch(function(){return null;});}
 function qualityCap(){var raw=state.settings&&state.settings.quality;var n=parseInt(raw,10);return isFinite(n)&&n>0?n:0;}
 // Can this device decode this variant at all? Separate from the quality
 // ceiling, which is a user preference rather than a hard limit: an
 // undecodable variant must never be auto-selected, a capped-out one may be
 // if nothing else is left.
-function groupDecodable(group){var caps=mediaCapabilities();return codecSupported(caps,isHevcGroup(group));}
+//
+// A silent probe is not a refusal here either. On a browser whose
+// `canPlayType` answers nothing at all, believing it would mark every entry
+// "не поддерживается" and hide most of the quality menu from a TV that plays
+// all of them - so with no evidence, everything is offered. The explicit
+// device profile outranks the probes entirely: declaring the device a TV has
+// to move the quality menu too, or the setting only half works.
+function codecDecodable(isHevc){
+ var profile=capabilityProfile();
+ if(profile==='tv')return true;
+ if(profile==='h264')return !isHevc;
+ var caps=mediaCapabilities();
+ if(!codecProbesTrustworthy(caps))return true;
+ return codecSupported(caps,isHevc);
+}
+function groupDecodable(group){return codecDecodable(isHevcGroup(group));}
 // Highest variant this device can actually decode, honouring the quality
 // ceiling from settings. Groups are already sorted by height, tallest first,
 // so the first match is the best one.
@@ -889,7 +989,7 @@ function isHevcGroup(group){var c=String(group&&group.codec||'').toLowerCase();r
 // also freezes ABR via `currentLevel` - choosing 720p by hand should stay
 // 720p, whereas the automatic choice may still adapt downward on a weak link.
 function hlsLevelHeight(level){return Number(level&&(level.height||(level.attrs&&level.attrs.RESOLUTION&&String(level.attrs.RESOLUTION).split('x')[1])))||0;}
-function hlsLevelDecodable(level){var codecs=String((level&&(level.codecs||level.videoCodec))||'');if(!codecs)return true;var caps=mediaCapabilities();return codecSupported(caps,/hvc1|hev1|hevc|h265/i.test(codecs));}
+function hlsLevelDecodable(level){var codecs=String((level&&(level.codecs||level.videoCodec))||'');if(!codecs)return true;return codecDecodable(/hvc1|hev1|hevc|h265/i.test(codecs));}
 function bestHlsLevel(cap){
  var hls=state.hls,levels=(hls&&hls.levels)||[],capped=-1,best=-1;
  for(var i=0;i<levels.length;i++){
@@ -924,7 +1024,17 @@ function hlsLevelForHeight(height){
 // HEVC/HDR only reaches the panel intact when the platform decoder gets the
 // file. Going through MSE (hls.js) commonly drops HDR to SDR on webOS, so a
 // direct progressive URL is preferred for those variants when it exists.
-function preferredModeFor(group){var manual=state.settings&&state.settings.stream_mode;if(manual&&manual!=='auto')return manual;var caps=mediaCapabilities(),variants=group&&group.variants||{};if(isHevcGroup(group)&&caps.hevc.native&&variants.http)return 'direct';return variants.hls?'hls':'relay';}
+//
+// The gate used to be a bare `caps.hevc.native`, i.e. one `canPlayType`
+// string had a veto over the only transport that can carry HDR - and on a
+// browser that answers '' to everything (see codecProbesTrustworthy) that
+// veto fired on hardware which decodes the file perfectly. Now a silent
+// browser gets direct tried anyway: if it really cannot decode it, the
+// `error` handler and the stall watchdog both relay it within seconds,
+// which is a far cheaper mistake than never offering HDR at all. An
+// explicit "no" (browser answers other codec questions, says no to HEVC)
+// still routes through hls.js, which may yet decode it via MSE.
+function preferredModeFor(group){var manual=state.settings&&state.settings.stream_mode;if(manual&&manual!=='auto')return manual;var caps=mediaCapabilities(),variants=group&&group.variants||{},profile=capabilityProfile();if(isHevcGroup(group)&&variants.http&&profile!=='h264'&&(profile==='tv'||caps.hevc.native||!codecProbesTrustworthy(caps)))return 'direct';return variants.hls?'hls':'relay';}
 function currentQualityGroup(){return state.playerStreams[Number(state.playerQualityIndex)||0]||state.playerStreams[0]||null;}
 function streamUrlForGroup(group,mode){if(!group)return '';var variants=group.variants||{};if(mode==='hls')return variants.hls4||variants.hls2||variants.hls||variants.http||group.url||'';return variants.http||variants.hls||variants.hls2||variants.hls4||group.url||'';}
 function currentHttpAudioSource(){var group=currentQualityGroup(),variants=group&&group.variants||{};return variants.http||'';}
@@ -1205,7 +1315,7 @@ function handleSessionExpired(){if(state.authRequired)return;state.authenticated
 function startAuth(){clearAuth();$('authModal').classList.remove('hidden');$('authIntro').classList.add('hidden');$('authStart').classList.add('hidden');$('authCodePanel').classList.remove('hidden');$('authRestart').classList.add('hidden');$('verificationUri').textContent='';$('userCode').textContent='------';$('authCountdown').textContent='';$('authStatus').textContent='Получаем код…';KPApi.startAuth().then(function(d){$('verificationUri').textContent=d.verification_uri;$('userCode').textContent=d.user_code;var left=d.expires_in||300;$('authStatus').textContent='Ожидаем подтверждение';$('authCountdown').textContent='Код действует ещё '+left+' сек.';state.authTick=setInterval(function(){left--;$('authCountdown').textContent='Код действует ещё '+left+' сек.';if(left<=0){clearAuth();$('authStatus').textContent='Код истёк';$('authRestart').classList.remove('hidden');$('authRestart').focus();}},500);state.authPoll=setInterval(function(){KPApi.pollAuth(d.code).then(function(x){if(x.status==='authorized'){clearAuth();$('authStatus').textContent='Устройство подключено';setTimeout(initializeAuthenticatedApp,700);}}).catch(function(e){KPApi.status().then(function(st){if(st&&st.authenticated){clearAuth();$('authStatus').textContent='Устройство подключено';setTimeout(initializeAuthenticatedApp,300);return;}clearAuth();$('authStatus').textContent='Ошибка: '+e.message;$('authRestart').classList.remove('hidden');}).catch(function(){clearAuth();$('authStatus').textContent='Ошибка: '+e.message;$('authRestart').classList.remove('hidden');});});},Math.max(5,d.interval||5)*1000);}).catch(function(e){$('authStatus').textContent='Ошибка: '+e.message;$('authRestart').classList.remove('hidden');});}
 function clearAuth(){if(state.authTick)clearInterval(state.authTick);if(state.authPoll)clearInterval(state.authPoll);state.authTick=state.authPoll=null;}
 function closeAuth(){if(state.authRequired)return;clearAuth();$('authModal').classList.add('hidden');}
-function loadSettings(){KPApi.settings().then(function(s){state.settings=s;var icon=normalizeAppIcon(s.app_icon||'kinopub');state.settings.app_icon=icon;$('setQuality').value=s.quality;$('setMode').value=s.stream_mode;$('setAudio').value=s.audio_language;$('setSubs').value=s.subtitles;applySubtitleSize(s.subtitle_size);$('setFullscreen').value=playerFullscreenMode();$('setAutoplay').checked=!!s.autoplay_next;$('setMotion').checked=!!s.reduce_motion;$('setHistoryFrames').checked=s.history_episode_frames!==false;var radios=document.querySelectorAll('input[name="appIcon"]');for(var i=0;i<radios.length;i++)radios[i].checked=radios[i].value===icon;applyBranding(icon);document.body.classList.toggle('reduce-motion',!!s.reduce_motion);});}
+function loadSettings(){KPApi.settings().then(function(s){state.settings=s;var icon=normalizeAppIcon(s.app_icon||'kinopub');state.settings.app_icon=icon;$('setQuality').value=s.quality;$('setMode').value=s.stream_mode;$('setAudio').value=s.audio_language;$('setSubs').value=s.subtitles;applySubtitleSize(s.subtitle_size);$('setFullscreen').value=playerFullscreenMode();$('setDeviceProfile').value=capabilityProfile();$('setAutoplay').checked=!!s.autoplay_next;$('setMotion').checked=!!s.reduce_motion;$('setHistoryFrames').checked=s.history_episode_frames!==false;var radios=document.querySelectorAll('input[name="appIcon"]');for(var i=0;i<radios.length;i++)radios[i].checked=radios[i].value===icon;applyBranding(icon);document.body.classList.toggle('reduce-motion',!!s.reduce_motion);});}
 
 function clearApplicationCache(){
  state.catalogCache={};
@@ -1219,7 +1329,11 @@ function clearApplicationCache(){
  KPApi.report('Frontend cache cleared',{cache_version:state.cacheVersion},'cache').catch(function(){});
  setTimeout(function(){route('popular');},350);
 }
-function saveSettings(){var s={quality:$('setQuality').value,stream_mode:$('setMode').value,audio_language:$('setAudio').value,subtitles:$('setSubs').value,subtitle_size:normalizeSubtitleSize($('setSubSize').value),player_fullscreen:$('setFullscreen').value,autoplay_next:$('setAutoplay').checked,reduce_motion:$('setMotion').checked,history_episode_frames:$('setHistoryFrames').checked,app_icon:selectedAppIcon()};KPApi.saveSettings(s).then(function(x){state.settings=x;x.app_icon=normalizeAppIcon(x.app_icon||'kinopub');applyBranding(x.app_icon);applySubtitleSize(x.subtitle_size);$('settingsStatus').textContent='Сохранено';document.body.classList.toggle('reduce-motion',!!x.reduce_motion);});}
+function saveSettings(){var s={quality:$('setQuality').value,stream_mode:$('setMode').value,audio_language:$('setAudio').value,subtitles:$('setSubs').value,subtitle_size:normalizeSubtitleSize($('setSubSize').value),player_fullscreen:$('setFullscreen').value,device_profile:$('setDeviceProfile').value,autoplay_next:$('setAutoplay').checked,reduce_motion:$('setMotion').checked,history_episode_frames:$('setHistoryFrames').checked,app_icon:selectedAppIcon()};var profileChanged=capabilityProfile()!==(s.device_profile||'auto');KPApi.saveSettings(s).then(function(x){state.settings=x;x.app_icon=normalizeAppIcon(x.app_icon||'kinopub');applyBranding(x.app_icon);applySubtitleSize(x.subtitle_size);$('settingsStatus').textContent='Сохранено';document.body.classList.toggle('reduce-motion',!!x.reduce_motion);
+ // The declared profile decides which files KinoPub offers, so it has to
+ // reach the device record now, not at the next app start - otherwise
+ // switching to "Телевизор" appears to do nothing until a reload.
+ if(profileChanged){$('settingsStatus').textContent='Сохранено, сообщаем KinoPub о декодере…';state.capsSync=syncDeviceCapabilities();state.capsSync.then(function(res){$('settingsStatus').textContent=res?'Сохранено. KinoPub: HEVC '+(res.current&&res.current.supportHevc?'да':'нет')+', 4K '+(res.current&&res.current.support4k?'да':'нет')+', HDR '+(res.current&&res.current.supportHdr?'да':'нет'):'Сохранено, но сообщить KinoPub не удалось';});}});}
 function hideSuggestions(){var box=$('searchSuggestions');box.classList.add('hidden');box.innerHTML='';$('searchInput').setAttribute('aria-expanded','false');state.suggestionIndex=-1;}
 function suggestionRows(){return $('searchSuggestions').querySelectorAll('.search-suggestion');}
 function openSuggestion(item){if(!item)return;$('searchInput').value=item.value||'';hideSuggestions();if(item.id){state.current={id:String(item.id),title:item.value||''};openDetails(state.current);return;}doSearch('title',cleanSearchQuery(item.value||''));}
@@ -1230,7 +1344,12 @@ function cleanSearchQuery(value){return String(value||'').replace(/\s*\(\d{4}\)\
 function requestSuggestions(){var q=$('searchInput').value.trim();if(state.searchTimer)clearTimeout(state.searchTimer);if(q.length<2){state.currentSuggestions=[];hideSuggestions();return;}state.searchTimer=setTimeout(function(){var seq=++state.searchSeq;KPApi.autocomplete(q).then(function(d){if(seq!==state.searchSeq||$('searchInput').value.trim()!==q)return;renderSuggestions((d&&d.items)||[]);}).catch(function(){if(seq===state.searchSeq)hideSuggestions();});},220);}
 function doSearch(mode,forcedQuery){var raw=forcedQuery!==undefined?forcedQuery:$('searchInput').value.trim();var q=cleanSearchQuery(raw);if(!q)return;hideSuggestions();if(typeof mode==='string')state.searchMode=mode;$('searchInput').value=q;showScreen('searchScreen');$('searchPageTitle').textContent='Поиск: '+q;pushHash(encodeSearchHash(state.searchMode,q));var modeButtons=document.querySelectorAll('[data-search-mode]');for(var m=0;m<modeButtons.length;m++)modeButtons[m].classList.toggle('active',modeButtons[m].getAttribute('data-search-mode')===state.searchMode);$('searchStatus').textContent='Ищем…';var g=$('searchResults');g.innerHTML='';KPApi.search(q,state.searchMode).then(function(d){var items=d.items||[];$('searchStatus').textContent=items.length?'Найдено: '+items.length:'';for(var i=0;i<items.length;i++)g.appendChild(card(items[i]));if(!items.length)g.innerHTML='<p class="empty-state">Ничего не найдено</p>';}).catch(function(e){$('searchStatus').textContent='Ошибка поиска';g.innerHTML='<p class="empty-state">'+esc(e&&e.message?e.message:String(e))+'</p>';});}
 function diagRow(k,v){return'<div class="diag-key">'+esc(k)+'</div><div class="diag-value">'+esc(v)+'</div>';}
-function openDiag(){var v=document.createElement('video'),caps=mediaCapabilities(),group=currentQualityGroup(),d={userAgent:navigator.userAgent,screen:screen.width+'×'+screen.height,hls:v.canPlayType('application/vnd.apple.mpegurl')||'нет','H.264':caps.h264.answer+(caps.h264.mse?' + MSE':''),'HEVC (Main10)':caps.hevc.answer+(caps.hevc.mse?' + MSE':'')+(caps.hevc.native?'':' — аппаратно недоступен'),'HDR-дисплей':caps.hdrDisplay?'да':'не сообщает','Гамут P3':caps.wideGamut?'да':'не сообщает','Потолок качества':qualityCap()?qualityCap()+'p':'авто','Текущий вариант':group?((group.quality||group.height+'p')+' · '+(group.codec||'?')+' · '+state.mode.toUpperCase()):'плеер закрыт','Декодируется':video.videoWidth?(video.videoWidth+'×'+video.videoHeight):'нет потока','Полный экран':playerFullscreenMode()+(fullscreenElement()?' · активен':' · не активен')};var h='';for(var k in d)h+=diagRow(k,d[k]);$('diagnosticsGrid').innerHTML=h;KPApi.health().then(function(x){$('diagnosticsGrid').innerHTML+=diagRow('backend',x.status+' '+x.version)+diagRow('API credentials',x.credentials_configured?'настроены':'не настроены');});KPApi.status().then(function(x){$('diagnosticsGrid').innerHTML+=diagRow('Сессия',x.authenticated?'активна':'нет')+diagRow('Refresh-токен',x.authenticated?(x.has_refresh_token?'есть':'ОТСУТСТВУЕТ — сессия умрёт вместе с access-токеном'):'—')+diagRow('Токен истекает через',x.authenticated?fmt(x.expires_in||0):'—');});KPApi.debugEvents().then(function(x){var l=[],a=x.events||[];for(var i=0;i<Math.min(a.length,30);i++)l.push(new Date(a[i].at*1000).toLocaleTimeString()+' ['+a[i].kind+'] '+a[i].message);$('diagnosticsLog').textContent=l.join('\n')||'Логи пусты';});$('diagnosticsModal').classList.remove('hidden');}
+function openDiag(){var v=document.createElement('video'),caps=mediaCapabilities(),group=currentQualityGroup(),d={userAgent:navigator.userAgent,screen:screen.width+'×'+screen.height,hls:v.canPlayType('application/vnd.apple.mpegurl')||'нет','H.264':caps.h264.answer+(caps.h264.mse?' + MSE':''),'HEVC (Main10)':caps.hevc.answer+(caps.hevc.mse?' + MSE':'')+(caps.hevc.native?'':(codecProbesTrustworthy(caps)?' — аппаратно недоступен':' — браузер не отвечает на пробы')),'HEVC 4K':caps.hevc4k.answer+(caps.hevc4k.mse?' + MSE':''),'Пробы кодеков':codecProbesTrustworthy(caps)?'отвечает, ответам можно верить':'молчит даже про H.264 — негативным ответам не верим','HDR-дисплей':answerLabel(caps.hdrAnswer),'Гамут P3':answerLabel(caps.gamutAnswer),'Профиль устройства':capabilityProfile(),'Сообщаем KinoPub':reportedLabel(reportedCapabilities()),'Потолок качества':qualityCap()?qualityCap()+'p':'авто','Текущий вариант':group?((group.quality||group.height+'p')+' · '+(group.codec||'?')+' · '+state.mode.toUpperCase()):'плеер закрыт','Декодируется':video.videoWidth?(video.videoWidth+'×'+video.videoHeight):'нет потока','Полный экран':playerFullscreenMode()+(fullscreenElement()?' · активен':' · не активен')};var h='';for(var k in d)h+=diagRow(k,d[k]);$('diagnosticsGrid').innerHTML=h;KPApi.health().then(function(x){$('diagnosticsGrid').innerHTML+=diagRow('backend',x.status+' '+x.version)+diagRow('API credentials',x.credentials_configured?'настроены':'не настроены');});KPApi.status().then(function(x){$('diagnosticsGrid').innerHTML+=diagRow('Сессия',x.authenticated?'активна':'нет')+diagRow('Refresh-токен',x.authenticated?(x.has_refresh_token?'есть':'ОТСУТСТВУЕТ — сессия умрёт вместе с access-токеном'):'—')+diagRow('Токен истекает через',x.authenticated?fmt(x.expires_in||0):'—');});KPApi.deviceState().then(function(x){var f=x.flags||{};$('diagnosticsGrid').innerHTML+=diagRow('KinoPub: HEVC',f.supportHevc?'да':'НЕТ — отдаёт только h264, без HDR и без Direct')+diagRow('KinoPub: 4K',f.support4k?'да':'нет')+diagRow('KinoPub: HDR',f.supportHdr?'да':'нет')+diagRow('KinoPub: тип потока',x.streaming_type||'—')+diagRow('KinoPub: устройство',(x.title||'—')+' · '+(x.software||'—'));}).catch(function(){$('diagnosticsGrid').innerHTML+=diagRow('KinoPub: устройство','не удалось прочитать');});KPApi.debugEvents().then(function(x){var l=[],a=x.events||[];for(var i=0;i<Math.min(a.length,30);i++)l.push(new Date(a[i].at*1000).toLocaleTimeString()+' ['+a[i].kind+'] '+a[i].message);$('diagnosticsLog').textContent=l.join('\n')||'Логи пусты';});$('diagnosticsModal').classList.remove('hidden');}
+// Three-way probe answers need three-way labels: "не сообщает" used to cover
+// both "no" and "never heard of the question", which is exactly the conflation
+// that hid the HDR regression.
+function answerLabel(answer){return answer===true?'да':answer===false?'нет':'браузер не знает такого запроса';}
+function reportedLabel(caps){var parts=[],names={hevc:'HEVC',uhd:'4K',hdr:'HDR'};for(var k in names)if(names.hasOwnProperty(k))parts.push(names[k]+' '+(caps[k]===true?'да':caps[k]===false?'нет':'не трогаем'));return parts.join(', ');}
 function openExplorer(){$('apiExplorerModal').classList.remove('hidden');setTimeout(function(){$('explorerPath').focus();},0);}function closeExplorer(){$('apiExplorerModal').classList.add('hidden');}
 function runExplorer(){var p=$('explorerPath').value.trim(),q=$('explorerQuery').value.trim();if(!p)return;KPApi.explore(p,q).then(function(d){$('explorerStatus').textContent='HTTP '+(d.response?d.response.status:'?');$('explorerOutput').textContent=JSON.stringify(d,null,2);}).catch(function(e){$('explorerStatus').textContent='Ошибка';$('explorerOutput').textContent=e.message;});}
 function compareFeeds(){

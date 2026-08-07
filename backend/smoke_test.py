@@ -63,8 +63,27 @@ with TestClient(app, raise_server_exceptions=False) as client:
     check('GET /settings', r.status_code == 200, f'HTTP {r.status_code} {r.text[:120]}')
     check('  player_fullscreen present', 'player_fullscreen' in r.json(), r.text[:160])
 
+    check('  device_profile present', 'device_profile' in r.json(), r.text[:200])
+
     r = client.put('/settings', json={'quality': 'auto', 'subtitle_size': 125})
     check('PUT /settings', r.status_code == 200, f'HTTP {r.status_code} {r.text[:120]}')
+
+    r = client.put('/settings', json={'device_profile': 'tv'})
+    check('PUT /settings keeps device_profile', r.json().get('device_profile') == 'tv', r.text[:200])
+
+    # The whole point of the tri-state payload: a field the browser could not
+    # determine must be allowed through as null and never coerced to False,
+    # because False is what KinoPub writes as `supportHevc=0` - which strips
+    # the HEVC/HDR file list for every title on the account.
+    from app.main import CapabilitiesPayload
+    blank = CapabilitiesPayload()
+    check('capabilities default to "unknown", not "unsupported"',
+          (blank.hevc, blank.uhd, blank.hdr) == (None, None, None),
+          f'{blank!r}')
+    partial = CapabilitiesPayload(hdr=True)
+    check('a single known flag leaves the others unknown',
+          (partial.hevc, partial.uhd, partial.hdr) == (None, None, True),
+          f'{partial!r}')
 
     r = client.get('/history')
     check('GET /history (local progress)', r.status_code == 200, f'HTTP {r.status_code} {r.text[:120]}')
