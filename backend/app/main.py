@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.80', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.81', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -169,6 +169,12 @@ class ProgressPayload(BaseModel):
     position: float = 0
     duration: float = 0
     completed: bool = False
+    # KinoPub's own `v1/watching/marktime`/`toggle` address a video by its
+    # ordinal position within a season (starting at 1), not by the internal
+    # media id this bridge otherwise uses - the player captures these from
+    # the same `collect_media` entry `episode_id` already comes from.
+    season: Optional[int] = None
+    episode_number: Optional[int] = None
 
 
 class AudioHlsPayload(BaseModel):
@@ -1318,23 +1324,14 @@ async def catalog_item_watchlist(item_id: str, kp_session: Optional[str] = Cooki
     return {'subscribed': bool(payload.get('watching'))}
 
 
-@app.get('/catalog/items/{item_id}/watching')
-async def catalog_item_watching(item_id: str, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
-    """KinoPub's own watched status for one title, straight from `v1/watching
-    ?id=` - a real per-video `status`/`time` (position), tracked across every
-    device the account has used, not just this client's local SQLite
-    progress. Cheap for a single title; unlike /watching/statuses (which
-    scans up to 20 pages of v1/history for the whole catalogue grid at once),
-    this has no bulk equivalent - it only ever takes one id."""
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
-    payload = await kino_get(session, 'v1/watching', {'id': item_id})
-    raw_item = payload.get('item') if isinstance(payload, dict) else {}
-    if not isinstance(raw_item, dict):
-        raw_item = {}
-    # A movie's `item` has a flat `videos` list; a series nests episodes
-    # under `seasons[].episodes[]` instead - there's no one shape to walk.
-    # `status` is -1 (never watched) / 0 (in progress) / 1 (watched) - a
-    # bare bool(status) would treat -1 as truthy and mark everything watched.
+def _watching_episode_map(raw_item: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Flatten `v1/watching?id=`'s per-video status into ``{video_id: {...}}``.
+
+    A movie's `item` has a flat `videos` list; a series nests episodes under
+    `seasons[].episodes[]` instead - there's no one shape to walk. `status`
+    is -1 (never watched) / 0 (in progress) / 1 (watched) - a bare
+    `bool(status)` would treat -1 as truthy and mark everything watched.
+    """
     videos: List[Dict[str, Any]] = [v for v in (raw_item.get('videos') or []) if isinstance(v, dict)]
     for season in (raw_item.get('seasons') or []):
         if isinstance(season, dict):
@@ -1349,9 +1346,25 @@ async def catalog_item_watching(item_id: str, kp_session: Optional[str] = Cookie
             'position': int(_plain_number(video.get('time')) or 0),
             'duration': int(_plain_number(video.get('duration')) or 0),
         }
+    return episodes
+
+
+@app.get('/catalog/items/{item_id}/watching')
+async def catalog_item_watching(item_id: str, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """KinoPub's own watched status for one title, straight from `v1/watching
+    ?id=` - a real per-video `status`/`time` (position), tracked across every
+    device the account has used, not just this client's local SQLite
+    progress. Cheap for a single title; unlike /watching/statuses (which
+    scans up to 20 pages of v1/history for the whole catalogue grid at once),
+    this has no bulk equivalent - it only ever takes one id."""
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    payload = await kino_get(session, 'v1/watching', {'id': item_id})
+    raw_item = payload.get('item') if isinstance(payload, dict) else {}
+    if not isinstance(raw_item, dict):
+        raw_item = {}
     return {
         'watched': raw_item.get('status') == 1,
-        'episodes': episodes,
+        'episodes': _watching_episode_map(raw_item),
     }
 
 
@@ -2563,9 +2576,55 @@ def get_history(media_id: str = '') -> Dict[str, Any]:
     return {'items': [dict(x) for x in rows]}
 
 @app.put('/history')
-def put_history(payload: ProgressPayload) -> Dict[str, str]:
+async def put_history(payload: ProgressPayload, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, str]:
     episode=payload.episode_id or ''
     completed=payload.completed or (payload.duration > 0 and payload.position / payload.duration >= .9)
     with db_connect() as conn:
         conn.execute("INSERT INTO watch_progress(media_id,episode_id,position,duration,completed,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(media_id,episode_id) DO UPDATE SET position=excluded.position,duration=excluded.duration,completed=excluded.completed,updated_at=excluded.updated_at", (payload.media_id,episode,float(payload.position),float(payload.duration),1 if completed else 0,time.time()))
+    await _mirror_watch_progress(payload, completed, kp_session)
     return {'status':'ok'}
+
+
+async def _mirror_watch_progress(payload: ProgressPayload, completed: bool, kp_session: Optional[str]) -> None:
+    """Push the same progress to KinoPub's own history, not just this
+    bridge's local SQLite - this bridge streams through its own relay/proxy,
+    so KinoPub's servers never see playback happen unless told explicitly.
+    Best-effort: a failure here must never break the local save, which is
+    what "Продолжить" actually depends on.
+
+    `v1/watching/marktime` records the resume position for "История" and
+    other devices - verified live that sending `time` at or past the
+    video's own duration also flips KinoPub's status to fully-watched on
+    its own, so this alone covers ordinary progress and completion.
+    `v1/watching/toggle` (the explicit watched/unwatched switch) is layered
+    on top only as a fallback for completion, and only after confirming
+    KinoPub doesn't already consider the episode watched: `toggle` *flips*
+    rather than sets, and the player calls this on both `pause` and `ended`
+    for the same finish (pause fires just before ended) - toggling
+    unconditionally would flip an already-watched episode back off on the
+    second call.
+    """
+    if not (payload.media_id.isdigit() and payload.episode_number):
+        return
+    try:
+        session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    except HTTPException:
+        return
+    params: Dict[str, Any] = {'id': payload.media_id, 'video': payload.episode_number}
+    if payload.season:
+        params['season'] = payload.season
+    try:
+        marktime_position = payload.duration if (completed and payload.duration) else payload.position
+        await kino_get(session, 'v1/watching/marktime', {**params, 'time': int(marktime_position)})
+        if completed and payload.episode_id:
+            watching_payload = await kino_get(session, 'v1/watching', {'id': payload.media_id})
+            raw_item = watching_payload.get('item') if isinstance(watching_payload, dict) else {}
+            episodes = _watching_episode_map(raw_item if isinstance(raw_item, dict) else {})
+            already_watched = bool(episodes.get(str(payload.episode_id), {}).get('watched'))
+            if not already_watched:
+                await kino_get(session, 'v1/watching/toggle', params)
+    except HTTPException as exc:
+        log_event('history', 'Remote watch-mark failed', {
+            'media_id': payload.media_id, 'video': payload.episode_number,
+            'completed': completed, 'status': exc.status_code,
+        })
