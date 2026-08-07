@@ -67,7 +67,7 @@ of guessing from docs — used constantly this session, keep using it.
 - Backend running version: **0.9.79**, containers up via `docker compose up -d`
 - `curl http://localhost:8080/bridge/health` to check it's alive
 - Working tree clean — the auto-commit hook (see below) picks up every turn
-- 184 frontend checks + 17 backend smoke checks, all green (see Testing below)
+- 213 frontend checks + 17 backend smoke checks, all green (see Testing below)
 
 ## How work has been happening (read this before doing anything)
 
@@ -209,11 +209,16 @@ Carried forward from before, still true unless someone's addressed them:
 New from this session:
 
 - ~~4K badge accuracy~~ — resolved, the badge was right; see item #2 at the top.
-- **`v1/collections`** (real curated collections/подборки) and
-  **`v1/bookmarks`** (real per-account bookmark folders — the "Закладки"
-  sidebar button is still dead, no `data-route`) are both confirmed-real,
-  unused endpoints, found during the API survey that led to items #1/#8.
-  Not requested yet, but the user may come back to either.
+- **`v1/collections`** (real curated collections/подборки, "Подборки"
+  sidebar button still dead, no `data-route`) - confirmed-real, unused
+  endpoint, found during the API survey that led to items #1/#8. Not
+  requested yet, but the user may come back to it. `v1/bookmarks` (its
+  sibling in that same survey) is **built** - see below.
+- ~~**`v1/bookmarks`**... "Закладки" sidebar button is still dead~~
+  **Built.** `GET /catalog/bookmarks` (folder list) + `GET
+  /catalog/bookmarks/{id}` (folder contents, real catalogue-item shape, same
+  card()/openDetails() as everywhere else). See README.md v0.9.92 / backend
+  0.9.85.
 - ~~**`v1/tv`** is a real live-TV-channel list...~~ **Built.** "Спорт" is now
   `GET /catalog/tv` (real `v1/tv`, all 51 channels for this account are
   sport) rendered as a channel-logo grid, playback via the existing `/hls`
@@ -255,7 +260,7 @@ file `eval`s the real source with the closing `}());` swapped to also expose
 functions under test on `global.__app`. Four use hand-rolled DOM stubs
 (fast, no deps); four (`sections.js`, `actions.js`, `episodes.js`,
 `panel.js`) load the real `index.html` into `jsdom`. See
-`frontend/tests/README.md` for the run recipe. **184 checks, 0 failures**.
+`frontend/tests/README.md` for the run recipe. **213 checks, 0 failures**.
 Note: `npm install` for the four jsdom-based suites is intermittently very
 slow in this sandbox (minutes, sometimes appears to hang) — it does succeed,
 so run the suite in the background rather than assuming the registry is down.

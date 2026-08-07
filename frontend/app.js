@@ -1,5 +1,5 @@
 (function(){'use strict';
-var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:Date.now(),catalogPages:{},catalogTotals:{},searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
+var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:Date.now(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,bookmarkFolders:null,bookmarkFolder:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
 var $=function(id){return document.getElementById(id);},video=$('video');
 // Every backend call that needs a session (catalog, history, profile, item
 // details...) raises a real HTTP 401 the moment the cookie is gone or
@@ -35,6 +35,7 @@ var routes={
  docuserial:{title:'Документальные сериалы',mode:'category',section:'docuserial',feed:'all'},
  tvshow:{title:'ТВ Шоу',mode:'category',section:'tvshow',feed:'all'},
  sport:{title:'Спорт',mode:'tv'},
+ bookmarks:{title:'Закладки',mode:'bookmarks'},
  settings:{title:'Настройки',mode:'settings'}
 };
 function esc(v){var d=document.createElement('div');d.textContent=String(v==null?'':v);return d.innerHTML;}
@@ -70,8 +71,89 @@ function posterBadges(item){
  return parts.length?'<div class="poster-badges">'+parts.join('')+'</div>':'';
 }
 function card(item){var p=ratings(item),status=watchedStatus(item),b=document.createElement('button');b.className='media-card focusable';var newTag=newEpisodesTag(item);var mark=newTag?'<div class="new-episodes-badge">'+esc(newTag)+'</div>':(status===1?'<div class="watched-overlay"><span>ПРОСМОТРЕНО</span></div>':(status===0?'<div class="continue-overlay"><span>ПРОДОЛЖИТЬ</span></div>':''));var episodeTag=historyEpisodeTag(item),subtitle=episodeTag||item.original_title||'';var useFrame=episodeTag&&item.episode_thumbnail&&(!state.settings||state.settings.history_episode_frames!==false);b.innerHTML='<div class="poster-art">'+mark+posterBadges(item)+'<div class="poster-ratings"><span><svg><use xlink:href="#i-thumb"></use></svg>'+p[0]+'</span><span><svg><use xlink:href="#i-imdb"></use></svg>'+p[1]+'</span><span><svg><use xlink:href="#i-kp"></use></svg>'+p[2]+'</span></div></div><div class="item-title">'+esc(item.title||'')+'</div><div class="item-author">'+esc(subtitle)+'</div>';var poster=b.querySelector('.poster-art');if(poster)poster.style.background=bgCss(useFrame?item.episode_thumbnail:item.poster,'poster',useFrame?item.poster:'');b.onclick=function(){state.current=item;openDetails(item);};b.onfocus=function(){state.current=item;};return b;}
-function renderTop(){var cfg=routes[state.route]||routes.popular,root=$('catalogTop');root.innerHTML='';if(cfg.mode==='tabs'){var row=document.createElement('div');row.className='tab-row';var tabs=[['popular','Популярные'],['new','Свежие'],['hot','Горячие']];for(var i=0;i<tabs.length;i++){var bt=document.createElement('button');bt.className='focusable catalog-tab'+(state.route===tabs[i][0]?' active':'');bt.textContent=tabs[i][1];bt.onclick=(function(r){return function(){route(r);};}(tabs[i][0]));row.appendChild(bt);}root.appendChild(row);return;}var head=document.createElement('div');head.className='catalog-title-row';var title='<h3>';if(cfg.show3d)title+='<button class="focusable title-link'+(state.route!=='3d'?' title-current':'')+'" data-route-inline="movie">Фильмы</button><span class="title-sep">&nbsp;</span><button class="focusable title-link'+(state.route==='3d'?' title-current':'')+'" data-route-inline="3d">3D</button>';else title+=esc(cfg.title);title+='</h3><button id="filterToggle" class="focusable filter-toggle">Фильтры ▾</button>';head.innerHTML=title;root.appendChild(head);var m=head.querySelector('[data-route-inline="movie"]');if(m)m.onclick=function(){route('movie');};var f=head.querySelector('[data-route-inline="3d"]');if(f)f.onclick=function(){route('3d');};var t=head.querySelector('#filterToggle');if(t)t.onclick=toggleFilters;}
-function toggleFilters(){var old=$('filterPanel');if(old){old.parentNode.removeChild(old);return;}var panel=document.createElement('div');panel.id='filterPanel';panel.className='filter-panel';var labels=['Жанр','Страна','Год','Качество','Субтитры','Сортировка'];for(var i=0;i<labels.length;i++)panel.innerHTML+='<label>'+labels[i]+'<select class="focusable"><option>Любые</option></select></label>';$('catalogTop').appendChild(panel);setTimeout(focusFirst,10);}
+function renderTop(){var cfg=routes[state.route]||routes.popular,root=$('catalogTop');root.innerHTML='';if(cfg.mode==='tabs'){var row=document.createElement('div');row.className='tab-row';var tabs=[['popular','Популярные'],['new','Свежие'],['hot','Горячие']];for(var i=0;i<tabs.length;i++){var bt=document.createElement('button');bt.className='focusable catalog-tab'+(state.route===tabs[i][0]?' active':'');bt.textContent=tabs[i][1];bt.onclick=(function(r){return function(){route(r);};}(tabs[i][0]));row.appendChild(bt);}root.appendChild(row);return;}var head=document.createElement('div');head.className='catalog-title-row';var title='<h3>';if(cfg.show3d)title+='<button class="focusable title-link'+(state.route!=='3d'?' title-current':'')+'" data-route-inline="movie">Фильмы</button><span class="title-sep">&nbsp;</span><button class="focusable title-link'+(state.route==='3d'?' title-current':'')+'" data-route-inline="3d">3D</button>';else title+=esc(cfg.title);var activeCount=activeFilterCount(cfg);title+='</h3><button id="filterToggle" class="focusable filter-toggle">Фильтры'+(activeCount?' ('+activeCount+')':'')+' ▾</button>';head.innerHTML=title;root.appendChild(head);var m=head.querySelector('[data-route-inline="movie"]');if(m)m.onclick=function(){route('movie');};var f=head.querySelector('[data-route-inline="3d"]');if(f)f.onclick=function(){route('3d');};var t=head.querySelector('#filterToggle');if(t)t.onclick=toggleFilters;renderFilterPanel(cfg);}
+// Real filters against verified `v1/items` parameters (kinoapi.com/api_video.html
+// + live checks) - the old panel was six dead `<select>` with a single
+// "Любые" option and no wiring at all, nothing here actually filtered.
+// "Субтитры" from the old stub is dropped rather than faked: the documented
+// `v1/items` params are type/title/genre/country/year/finished/actor/
+// director/letter/conditions/force/sort/quality - no subtitle field, and the
+// catalogue list payload doesn't carry per-item subtitle data either (same
+// reason the poster "Субтитры" badge was removed earlier).
+var FILTER_SORTS=[['','По умолчанию'],['-created','Сначала новые'],['-year','Год, сначала новые'],['year','Год, сначала старые'],['-rating','Рейтинг'],['title','Название А-Я'],['-views','Популярность']];
+// The reference id from `v1/references/video-quality`, NOT the raw
+// resolution - verified live that `quality=2160` silently returns zero
+// results while `quality=4` returns the same 2160p titles. Off by one
+// digit and the filter would look broken.
+var FILTER_QUALITIES=[['','Любое'],['1','480p'],['2','720p'],['3','1080p'],['4','4K']];
+// v1/genres?type= is itself type-scoped (checked live): movie/serial/3d all
+// return the general 30-genre list, docu/tvshow/concert return their own
+// distinct sets, and "anime" is not a recognised type at all (falls back to
+// an unrelated 115-entry list, confirmed by comparing it against a bogus
+// type string and getting the identical result) - matches the rest of this
+// app already treating "Аниме" as a genre (id 25), not a content type.
+function sectionGenreType(cfg){
+ switch(cfg.section){
+  case 'concert': return 'concert';
+  case 'documovie': case 'docuserial': return 'docu';
+  case 'tvshow': return 'tvshow';
+  default: return 'movie';
+ }
+}
+function filterStorageKey(cfg){return cfg.section+':'+cfg.feed;}
+function currentFilters(cfg){return state.catalogFilters[filterStorageKey(cfg)]||{};}
+function activeFilterCount(cfg){var f=currentFilters(cfg),n=0;for(var k in f)if(f[k])n++;return n;}
+function setFilter(cfg,name,value){
+ var key=filterStorageKey(cfg),next={};
+ var current=state.catalogFilters[key]||{};
+ for(var k in current)if(current.hasOwnProperty(k))next[k]=current[k];
+ if(value)next[name]=value;else delete next[name];
+ state.catalogFilters[key]=next;
+ renderCatalog();
+}
+function resetFilters(cfg){state.catalogFilters[filterStorageKey(cfg)]={};renderCatalog();}
+function filterYearOptions(){var y=new Date().getFullYear()+1,out=[['','Любой']];for(var year=y;year>=1930;year--)out.push([String(year),String(year)]);return out;}
+function fillSelect(select,options,selected){select.innerHTML='';for(var i=0;i<options.length;i++){var o=document.createElement('option');o.value=options[i][0];o.textContent=options[i][1];if(options[i][0]===selected)o.selected=true;select.appendChild(o);}}
+function loadFilterGenres(type){
+ if(state.filterGenres[type])return Promise.resolve(state.filterGenres[type]);
+ return KPApi.genres(type).then(function(data){var list=(data&&data.genres)||[];state.filterGenres[type]=list;return list;}).catch(function(){return [];});
+}
+function loadFilterCountries(){
+ if(state.filterCountries)return Promise.resolve(state.filterCountries);
+ return KPApi.countries().then(function(data){state.filterCountries=(data&&data.countries)||[];return state.filterCountries;}).catch(function(){return [];});
+}
+function renderFilterPanel(cfg){
+ var old=$('filterPanel');if(old)old.parentNode.removeChild(old);
+ if(!state.filterPanelOpen)return;
+ var filters=currentFilters(cfg),panel=document.createElement('div');
+ panel.id='filterPanel';panel.className='filter-panel';
+ panel.innerHTML=
+  '<label>Жанр<select id="filterGenre" class="focusable"><option>Загрузка…</option></select></label>'+
+  '<label>Страна<select id="filterCountry" class="focusable"><option>Загрузка…</option></select></label>'+
+  '<label>Год<select id="filterYear" class="focusable"></select></label>'+
+  '<label>Качество<select id="filterQuality" class="focusable"></select></label>'+
+  '<label>Сортировка<select id="filterSort" class="focusable"></select></label>'+
+  '<label>&nbsp;<button id="filterReset" class="focusable secondary">Сбросить</button></label>';
+ $('catalogTop').appendChild(panel);
+ fillSelect($('filterYear'),filterYearOptions(),filters.year||'');
+ fillSelect($('filterQuality'),FILTER_QUALITIES,filters.quality||'');
+ fillSelect($('filterSort'),FILTER_SORTS,filters.sort||'');
+ $('filterYear').onchange=function(){setFilter(cfg,'year',this.value);};
+ $('filterQuality').onchange=function(){setFilter(cfg,'quality',this.value);};
+ $('filterSort').onchange=function(){setFilter(cfg,'sort',this.value);};
+ $('filterReset').onclick=function(){resetFilters(cfg);};
+ loadFilterGenres(sectionGenreType(cfg)).then(function(list){
+  var select=$('filterGenre');if(!select)return;
+  fillSelect(select,[['','Любой']].concat(list.map(function(g){return [String(g.id),g.title];})),filters.genre||'');
+  select.onchange=function(){setFilter(cfg,'genre',this.value);};
+ });
+ loadFilterCountries().then(function(list){
+  var select=$('filterCountry');if(!select)return;
+  fillSelect(select,[['','Любая']].concat(list.map(function(c){return [String(c.id),c.title];})),filters.country||'');
+  select.onchange=function(){setFilter(cfg,'country',this.value);};
+ });
+}
+function toggleFilters(){state.filterPanelOpen=!state.filterPanelOpen;renderFilterPanel(routes[state.route]||routes.popular);}
 // The grid is CSS auto-fill (`repeat(auto-fill,minmax(165px,1fr))`), so the
 // browser already resolves it to one fixed-width track per column before any
 // cards are even in it - reading the computed style back gives the exact
@@ -86,7 +168,16 @@ function gridColumns(){var g=$('catalogGrid'),dv=document.defaultView;if(!g||!dv
 // 50/cols keeps the total near 50 while landing on a whole number of rows -
 // 7/row -> 7 rows (49), 8/row -> 6 rows (48), 6/row -> 8 rows (48).
 function catalogPerPage(){var cols=gridColumns();if(!cols)return state.catalogPerPage||48;var rows=Math.max(1,Math.round(50/cols));var perpage=rows*cols;if(perpage!==state.catalogPerPage){state.catalogPerPage=perpage;state.catalogCache={};state.catalogPages={};state.catalogTotals={};}return perpage;}
-function catalogPageKey(cfg){return cfg.mode==='history'?('history:'+(state.historyType||'all')):(cfg.section+':'+cfg.feed);}
+// Filters are folded into the page/cache key itself, not tracked separately:
+// changing a filter naturally lands on an unseen key, which means page 0,
+// no stale cache, and no known total-pages count - exactly the reset a
+// filter change should cause, for free.
+function catalogFilterSignature(cfg){var f=currentFilters(cfg),parts=[];['genre','country','year','quality','sort'].forEach(function(k){if(f[k])parts.push(k+'='+f[k]);});return parts.length?'?'+parts.join('&'):'';}
+function catalogPageKey(cfg){
+ if(cfg.mode==='history')return 'history:'+(state.historyType||'all');
+ if(cfg.mode==='bookmarks')return 'bookmarks:'+(state.bookmarkFolder||'list');
+ return filterStorageKey(cfg)+catalogFilterSignature(cfg);
+}
 function currentCatalogPage(cfg){var key=catalogPageKey(cfg);return state.catalogPages[key]||0;}
 function setCatalogPage(page){var cfg=routes[state.route]||routes.popular,key=catalogPageKey(cfg);state.catalogPages[key]=Math.max(0,page||0);renderCatalog();setTimeout(function(){try{$('catalogTop').scrollIntoView(true);}catch(e){}},20);}
 function pageButton(label,page,active,disabled,extraClass){var b=document.createElement('button');b.className='focusable page-button'+(active?' active':'')+(extraClass?' '+extraClass:'');b.textContent=label;b.disabled=!!disabled;if(!disabled)b.onclick=function(){setCatalogPage(page);};return b;}
@@ -153,6 +244,13 @@ function renderHistory(cfg){
 // episodes (KinoPub's real v1/watching/serials, not a history scan - that
 // would have meant "everything ever watched" instead of "what's new").
 function updateWatchingCount(n){var chip=$('watchingCount');if(!chip)return;chip.textContent=n>0?String(n):'';chip.classList.toggle('hidden',!n);}
+// Previously only fetched when the user actually opened "Я смотрю"
+// (inside renderWatching below), so the sidebar badge stayed blank until
+// the first click - the whole point of a badge is to show the count before
+// you go looking. Fetched once at startup instead; renderWatching's own
+// fetch still runs when the section is opened (cheap, and keeps the number
+// fresh rather than trusting a load that might be minutes old).
+function loadWatchingCount(){return KPApi.watchingList().then(function(data){updateWatchingCount(((data&&data.items)||[]).length);}).catch(function(){});}
 function renderWatching(cfg){
  renderTop();
  var g=$('catalogGrid');
@@ -200,20 +298,90 @@ function renderTv(cfg){
   KPApi.report('TV channels failed',{error:String(err)},'catalog').catch(function(){});
  });
 }
+// "Закладки" - real per-account bookmark folders (v1/bookmarks), matched
+// against how kino.watch itself presents them (checked live): a plain list
+// of named folders with an item count, click into one to see the same kind
+// of poster grid as everywhere else - folder contents are ordinary
+// catalogue items, so the existing card()/openDetails() flow needs no
+// changes at all. Browsing only: creating/renaming/deleting folders and
+// adding/removing titles are real documented endpoints too, just not asked
+// for here.
+function bookmarkFolderCard(folder){
+ var b=document.createElement('button');b.className='media-card bookmark-folder-card focusable';
+ b.innerHTML='<div class="poster-art bookmark-folder-art"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M10 6h28a2 2 0 0 1 2 2v34l-16-9-16 9V8a2 2 0 0 1 2-2z"/></svg></div><div class="item-title">'+esc(folder.title||'')+'</div><div class="item-author">'+esc(plural(folder.count||0,'тайтл','тайтла','тайтлов'))+'</div>';
+ b.onclick=function(){state.bookmarkFolder=folder.id;renderCatalog();};
+ return b;
+}
+function renderBookmarkFolderList(){
+ var root=$('catalogTop');root.innerHTML='';
+ var head=document.createElement('div');head.className='catalog-title-row';head.innerHTML='<h3>Закладки</h3>';
+ root.appendChild(head);
+ var g=$('catalogGrid');g.className='poster-grid';$('catalogPagination').classList.add('hidden');
+ g.innerHTML='<p class="empty-state">Загружаем закладки…</p>';
+ var requestId=++state.catalogRequest;
+ KPApi.bookmarkFolders().then(function(data){
+  if(requestId!==state.catalogRequest)return;
+  var folders=(data&&data.folders)||[];
+  state.bookmarkFoldersCache=folders;
+  g.innerHTML='';
+  for(var i=0;i<folders.length;i++)g.appendChild(bookmarkFolderCard(folders[i]));
+  if(!folders.length)g.innerHTML='<p class="empty-state">Закладок пока нет</p>';
+ }).catch(function(err){
+  if(requestId!==state.catalogRequest)return;
+  g.innerHTML='<p class="empty-state">Не удалось загрузить закладки: '+esc(err&&err.message?err.message:String(err))+'</p>';
+  KPApi.report('Bookmark folders failed',{error:String(err)},'catalog').catch(function(){});
+ });
+}
+function renderBookmarkFolderItems(folderId){
+ var root=$('catalogTop');root.innerHTML='';
+ var known=(state.bookmarkFoldersCache||[]).filter(function(f){return String(f.id)===String(folderId);})[0];
+ var head=document.createElement('div');head.className='catalog-title-row';
+ head.innerHTML='<h3><button id="bookmarksBack" class="focusable title-link" type="button">← Закладки</button>&nbsp;&nbsp;'+esc(known?known.title:'')+'</h3>';
+ root.appendChild(head);
+ var back=head.querySelector('#bookmarksBack');if(back)back.onclick=function(){state.bookmarkFolder=null;renderCatalog();};
+ // Reads/writes through the normal catalogPageKey()/setCatalogPage() path
+ // (keyed to 'bookmarks:<folderId>' there) rather than a hand-rolled one, so
+ // the existing pagination buttons (which call setCatalogPage -> renderCatalog)
+ // land back here on the right page instead of a page number nothing reads.
+ var cfg=routes.bookmarks,page=currentCatalogPage(cfg);
+ var g=$('catalogGrid');g.className='poster-grid';
+ g.innerHTML='<p class="empty-state">Загружаем…</p>';$('catalogPagination').classList.add('hidden');
+ var requestId=++state.catalogRequest;
+ KPApi.bookmarkFolder(folderId,page).then(function(data){
+  if(requestId!==state.catalogRequest)return;
+  var items=(data&&data.items)||[];
+  renderCatalogItems(items);
+  var meta={page:data&&data.page||0,total_pages:data&&data.total_pages||0,total_items:(known&&known.count)||(data&&data.total_items)||0,has_next:!!(data&&data.has_next),perpage:(data&&data.perpage)||48};
+  renderPagination(meta,items.length);
+ }).catch(function(err){
+  if(requestId!==state.catalogRequest)return;
+  g.innerHTML='<p class="empty-state">Не удалось загрузить закладки: '+esc(err&&err.message?err.message:String(err))+'</p>';
+  KPApi.report('Bookmark folder failed',{folder:folderId,error:String(err)},'catalog').catch(function(){});
+ });
+}
+function renderBookmarks(cfg){if(state.bookmarkFolder)renderBookmarkFolderItems(state.bookmarkFolder);else renderBookmarkFolderList();}
 function renderCatalog(){
  var cfg=routes[state.route]||routes.popular;
  if(cfg.mode==='history'){renderHistory(cfg);return;}
  if(cfg.mode==='watching'){renderWatching(cfg);return;}
  if(cfg.mode==='tv'){renderTv(cfg);return;}
+ if(cfg.mode==='bookmarks'){renderBookmarks(cfg);return;}
  renderTop();
  var g=$('catalogGrid'),page=currentCatalogPage(cfg);
  g.className='poster-grid';
  var perpage=catalogPerPage(),cacheKey=catalogPageKey(cfg)+':'+page+':'+perpage;
  g.innerHTML='<p class="empty-state">Загрузка раздела…</p>';$('catalogPagination').classList.add('hidden');
+ var filters=currentFilters(cfg),filtered=!!activeFilterCount(cfg);
  var cached=state.catalogCache[cacheKey];
- if(cached){renderCatalogItems(cached.items);renderPagination(cached.meta,cached.items.length);if(page===0||!cached.meta.total_pages||cached.meta.total_pages<=1)discoverTotalPages(cfg,cached.meta,cached.items.length);return;}
+ // /catalog/page-count (used by discoverTotalPages) isn't filter-aware - it
+ // would probe the unfiltered section and could overwrite a correct
+ // filtered total with an unrelated one. Not needed anyway: `feed=all`
+ // (the only feed filters apply to, `v1/items` under the hood) already
+ // returns a reliable pagination.total on every request, unlike the
+ // shortcut feeds discoverTotalPages exists for.
+ if(cached){renderCatalogItems(cached.items);renderPagination(cached.meta,cached.items.length);if(!filtered&&(page===0||!cached.meta.total_pages||cached.meta.total_pages<=1))discoverTotalPages(cfg,cached.meta,cached.items.length);return;}
  var requestId=++state.catalogRequest;
- KPApi.catalog(cfg.section,cfg.feed,page,state.cacheVersion,perpage).then(function(data){
+ KPApi.catalog(cfg.section,cfg.feed,page,state.cacheVersion,perpage,filters).then(function(data){
    if(requestId!==state.catalogRequest)return;
    var items=(data&&data.items)||[],meta={page:data&&data.page||0,total_pages:data&&data.total_pages||0,total_items:data&&data.total_items||0,has_next:!!(data&&data.has_next),perpage:perpage};
    var totalKey=catalogPageKey(cfg),reached=(parseInt(meta.page,10)||0)+1;
@@ -221,8 +389,10 @@ function renderCatalog(){
    meta.total_pages=Math.max(meta.total_pages||0,state.catalogTotals[totalKey]||0);
    state.catalogCache[cacheKey]={items:items,meta:meta};
    renderCatalogItems(items);renderPagination(meta,items.length);
-   if(page===0||!meta.total_pages||meta.total_pages<=1)discoverTotalPages(cfg,meta,items.length,false);
-   else if(items.length>=perpage&&meta.total_pages&&reached>=meta.total_pages)discoverTotalPages(cfg,meta,items.length,true);
+   if(!filtered){
+    if(page===0||!meta.total_pages||meta.total_pages<=1)discoverTotalPages(cfg,meta,items.length,false);
+    else if(items.length>=perpage&&meta.total_pages&&reached>=meta.total_pages)discoverTotalPages(cfg,meta,items.length,true);
+   }
  }).catch(function(err){
    if(requestId!==state.catalogRequest)return;
    g.innerHTML='<p class="empty-state">Не удалось загрузить раздел: '+esc(err&&err.message?err.message:String(err))+'</p>';$('catalogPagination').classList.add('hidden');
@@ -231,7 +401,7 @@ function renderCatalog(){
 }
 function renderCatalogItems(items){var g=$('catalogGrid');g.innerHTML='';for(var i=0;i<items.length;i++)g.appendChild(card(items[i]));if(!items.length)g.innerHTML='<p class="empty-state">В этом разделе '+esc(appBrandName())+' пока не вернул контент</p>';}
 
-function resetNavigationState(name){var cfg=routes[name];if(cfg){state.catalogPages[catalogPageKey(cfg)]=0;}var input=$('searchInput');if(input)input.value='';state.currentSuggestions=[];state.suggestionIndex=-1;if(state.searchTimer){clearTimeout(state.searchTimer);state.searchTimer=null;}state.searchSeq++;hideSuggestions();}
+function resetNavigationState(name){state.bookmarkFolder=null;var cfg=routes[name];if(cfg){state.catalogPages[catalogPageKey(cfg)]=0;}var input=$('searchInput');if(input)input.value='';state.currentSuggestions=[];state.suggestionIndex=-1;if(state.searchTimer){clearTimeout(state.searchTimer);state.searchTimer=null;}state.searchSeq++;hideSuggestions();}
 // Screens are mutually exclusive panes inside the content shell. The details
 // view is one of them now, so opening a card replaces the grid instead of
 // covering it, and Back returns to whichever screen you came from.
@@ -963,7 +1133,7 @@ function initializeAuthenticatedApp(){state.authenticated=true;setAuthLocked(fal
  // playback of a session gets the previous device profile's file list.
  // play() waits on this promise, which is normally long resolved by then.
  state.capsSync=syncDeviceCapabilities();
- if(!state.appInitialized){state.appInitialized=true;applyHash();loadSettings();}else if(state.sessionExpired){state.sessionExpired=false;var scr=visibleScreen();if(scr==='detailsScreen'&&state.current)openDetails(state.current);else if(scr==='searchScreen')doSearch(state.searchMode);else renderCatalog();}loadProfile(true);loadWatchedStatuses();}
+ if(!state.appInitialized){state.appInitialized=true;applyHash();loadSettings();}else if(state.sessionExpired){state.sessionExpired=false;var scr=visibleScreen();if(scr==='detailsScreen'&&state.current)openDetails(state.current);else if(scr==='searchScreen')doSearch(state.searchMode);else renderCatalog();}loadProfile(true);loadWatchedStatuses();loadWatchingCount();}
 // A 401 from any authenticated call means the session died mid-use (cookie
 // gone, or KinoPub's refresh token was revoked server-side) - show the exact
 // same gate as a first-time visitor instead of leaving whatever error text

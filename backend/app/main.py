@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.84', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.85', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -794,11 +794,25 @@ CATALOG_FEEDS = {
 }
 
 @app.get('/catalog/list')
-async def catalog_list(section: str = 'movie', feed: str = 'fresh', page: int = 0, perpage: int = 48, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_list(
+    section: str = 'movie', feed: str = 'fresh', page: int = 0, perpage: int = 48,
+    genre: Optional[int] = None, country: Optional[int] = None, year: Optional[int] = None,
+    quality: Optional[int] = None, sort: Optional[str] = None,
+    kp_session: Optional[str] = Cookie(default=None),
+) -> Dict[str, Any]:
     """Return one explicitly typed KinoPub catalogue section.
 
     Each sidebar section is sent to KinoPub with its own API ``type`` value,
     rather than being approximated by filtering a mixed movie/serial payload.
+
+    The optional filters mirror real, verified `v1/items` parameters - not
+    guessed. Two things are non-obvious and were checked live before
+    shipping: `quality` is the small **reference id** from
+    `v1/references/video-quality` (1=480p..4=4K), not the raw resolution -
+    `quality=2160` silently returns zero results, `quality=4` returns the
+    same 2160p titles. `sort` takes a bare field name
+    (id/year/title/created/updated/rating/views/watchers), `-field` for
+    descending.
     """
     section = section.strip().lower()
     feed = feed.strip().lower()
@@ -806,6 +820,16 @@ async def catalog_list(section: str = 'movie', feed: str = 'fresh', page: int = 
     endpoint = CATALOG_FEEDS.get(feed)
     if not selector:
         raise HTTPException(400, f'Unknown catalogue section: {section}')
+    if genre is not None:
+        selector['genre'] = genre
+    if country is not None:
+        selector['country'] = country
+    if year is not None:
+        selector['year'] = year
+    if quality is not None:
+        selector['quality'] = quality
+    if sort:
+        selector['sort'] = sort
     if not endpoint:
         raise HTTPException(400, f'Unknown catalogue feed: {feed}')
     # The UI uses zero-based indexes internally, while KinoPub's catalogue
@@ -1217,6 +1241,76 @@ async def catalog_tv(kp_session: Optional[str] = Cookie(default=None)) -> Dict[s
         })
     log_event('catalog', 'TV channels loaded', {'count': len(channels)})
     return {'channels': channels}
+
+
+@app.get('/catalog/genres')
+async def catalog_genres(content_type: str = 'movie', kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """Real genre reference list (`v1/genres?type=`) for the filter panel -
+    replaces the old empty stub `<select>` that had no options at all."""
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    payload = await kino_get(session, 'v1/genres', {'type': content_type} if content_type else {})
+    raw_items = payload.get('items') if isinstance(payload, dict) else None
+    genres = [{'id': r.get('id'), 'title': str(r.get('title') or '')} for r in (raw_items or []) if isinstance(r, dict) and r.get('id') is not None]
+    return {'genres': genres}
+
+
+@app.get('/catalog/countries')
+async def catalog_countries(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """Real country reference list (`v1/countries`) for the filter panel."""
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    payload = await kino_get(session, 'v1/countries', {})
+    raw_items = payload.get('items') if isinstance(payload, dict) else (payload if isinstance(payload, list) else None)
+    countries = [{'id': r.get('id'), 'title': str(r.get('title') or '')} for r in (raw_items or []) if isinstance(r, dict) and r.get('id') is not None]
+    return {'countries': countries}
+
+
+@app.get('/catalog/bookmarks')
+async def catalog_bookmarks(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """Real per-account bookmark folders (`v1/bookmarks`,
+    kinoapi.com/api_bookmarks.html) - the "Закладки" sidebar button was dead
+    (no `data-route`) before this. Browsing only for now: creating/renaming/
+    deleting folders and adding/removing items are real documented endpoints
+    too (`v1/bookmarks/create`, `/add`, `/remove-folder`, `/remove-item`,
+    `/toggle-item`) but weren't asked for, so not wired up.
+    """
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    payload = await kino_get(session, 'v1/bookmarks', {})
+    raw_items = payload.get('items') if isinstance(payload, dict) else None
+    folders = []
+    for r in (raw_items or []):
+        if not isinstance(r, dict) or r.get('id') is None:
+            continue
+        folders.append({
+            'id': str(r.get('id')),
+            'title': str(r.get('title') or ''),
+            'count': int(_plain_number(r.get('count')) or 0),
+            'views': int(_plain_number(r.get('views')) or 0),
+            'updated': r.get('updated'),
+        })
+    return {'folders': folders}
+
+
+@app.get('/catalog/bookmarks/{folder_id}')
+async def catalog_bookmark_folder(folder_id: str, page: int = 0, perpage: int = 48, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """One bookmark folder's contents (`v1/bookmarks/view?folder=`) - same
+    item shape as the regular catalogue, so the existing card/details flow
+    works unchanged."""
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    api_page = max(0, page) + 1
+    perpage = max(1, min(perpage, 100))
+    payload = await kino_get(session, 'v1/bookmarks/view', {'folder': folder_id, 'page': api_page, 'perpage': perpage})
+    raw_folder = payload.get('folder') if isinstance(payload, dict) else {}
+    items = extract_catalog_items(payload)
+    totals = _pagination_values(payload, perpage)
+    return {
+        'folder': {'id': folder_id, 'title': str((raw_folder or {}).get('title') or '')},
+        'page': page,
+        'perpage': perpage,
+        'total_items': totals['total_items'],
+        'total_pages': totals['total_pages'],
+        'has_next': (page + 1 < totals['total_pages']) if totals['total_pages'] > 1 else (len(items) >= perpage),
+        'items': items,
+    }
 
 
 @app.get('/catalog/autocomplete')

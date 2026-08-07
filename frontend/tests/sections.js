@@ -26,6 +26,15 @@ const HISTORY = {
   '3d':  [{ id:'4', type:'3d',    title:'Только 3D',    watched_at: now - 3 * DAY }],
 };
 
+const GENRES = [{id:1,title:'Комедия'},{id:9,title:'Драма'}];
+const COUNTRIES = [{id:1,title:'США'},{id:14,title:'Канада'}];
+const FOLDERS = [{id:'f1',title:'йоу',count:5,views:3}];
+const FOLDER_ITEMS = [
+  {id:'m1',type:'movie',title:'Как стать миллионером'},
+  {id:'m2',type:'movie',title:'Притворись моей женой'},
+];
+
+let lastCatalogFilters = null;
 const calls = [];
 global.KPApi = {
   status:()=>new Promise(()=>{}), settings:()=>new Promise(()=>{}), profile:()=>new Promise(()=>{}),
@@ -34,17 +43,25 @@ global.KPApi = {
   createAudioHls:()=>new Promise(()=>{}), audioHlsStatus:()=>new Promise(()=>{}),
   stopAudioHls:()=>Promise.resolve({}), item:()=>new Promise(()=>{}),
   pageCount:()=>new Promise(()=>{}),
-  catalog:(section,feed,page)=>{ calls.push(['catalog',section,feed,page]);
+  catalog:(section,feed,page,nonce,perpage,filters)=>{ calls.push(['catalog',section,feed,page]);
+    lastCatalogFilters = filters || {};
     return Promise.resolve({items:[],page:page||0,total_pages:3,total_items:0,has_next:true}); },
   kinoHistory:(page,type)=>{ calls.push(['history',page,type||'']);
     return Promise.resolve({items:HISTORY[type||'']||[],page:page||0,total_pages:2,total_items:4,has_next:true}); },
+  genres:(type)=>{ calls.push(['genres',type]); return Promise.resolve({genres:GENRES}); },
+  countries:()=>Promise.resolve({countries:COUNTRIES}),
+  watchingList:()=>Promise.resolve({items:[{id:'w1'},{id:'w2'},{id:'w3'}]}),
+  bookmarkFolders:()=>Promise.resolve({folders:FOLDERS}),
+  bookmarkFolder:(id,page)=>{ calls.push(['bookmarkFolder',id,page]);
+    return Promise.resolve({folder:{id,title:'йоу'},items:FOLDER_ITEMS,page:page||0,total_pages:1,total_items:5,has_next:false,perpage:48}); },
   imageProxyUrl:u=>u, streamProxyUrl:u=>u, hlsProxyUrl:u=>u, subtitleProxyUrl:u=>u,
 };
 window.KPApi = global.KPApi;
 
 const src = fs.readFileSync(process.argv[2] || path.join(FRONT, 'app.js'), 'utf8');
 eval(src.replace('}());', 'global.__app={state:state,route:route,renderCatalog:renderCatalog,'
-  + 'setHistoryType:setHistoryType,routes:routes,dayLabel:historyDayLabel};}());'));
+  + 'setHistoryType:setHistoryType,routes:routes,dayLabel:historyDayLabel,'
+  + 'loadWatchingCount:loadWatchingCount};}());'));
 const app = global.__app, st = app.state;
 
 let failures = 0;
@@ -114,6 +131,89 @@ const click = el => el.dispatchEvent(new window.MouseEvent('click', { bubbles: t
   console.log('--- leaving history restores the poster grid ---');
   calls.length = 0; app.route('movie'); await settle();
   check('grid class restored', document.getElementById('catalogGrid').className, 'poster-grid');
+
+  console.log('--- "Я смотрю" sidebar badge shows a count before the section is ever opened ---');
+  const badge = document.getElementById('watchingCount');
+  check('starts blank/hidden, nothing fetched yet', badge.classList.contains('hidden'), true);
+  await app.loadWatchingCount();
+  check('shows the real count after the startup fetch', badge.textContent, '3');
+  check('and is visible', badge.classList.contains('hidden'), false);
+
+  console.log('--- filter panel: real options, not the old dead stub ---');
+  app.route('movie'); await settle();
+  check('closed by default', !!document.getElementById('filterPanel'), false);
+  click(document.getElementById('filterToggle')); await settle();
+  const panel = document.getElementById('filterPanel');
+  check('opens on click', !!panel, true);
+  check('genre options come from KPApi.genres, not a single "Любые" stub',
+    qa('#filterGenre option').map(o => o.textContent), ['Любой','Комедия','Драма']);
+  check('asks for genres scoped to this section\'s content type', calls.filter(c => c[0]==='genres').pop(), ['genres','movie']);
+  check('country options come from KPApi.countries',
+    qa('#filterCountry option').map(o => o.textContent), ['Любая','США','Канада']);
+  check('quality options are the reference ids (4=4K), not raw resolutions',
+    qa('#filterQuality option').map(o => o.value), ['','1','2','3','4']);
+  check('sort has real v1/items field names', qa('#filterSort option').map(o => o.value)[1], '-created');
+
+  console.log('--- picking a filter actually refetches with it ---');
+  calls.length = 0;
+  const yearSelect = document.getElementById('filterYear');
+  yearSelect.value = '2020';
+  yearSelect.dispatchEvent(new window.Event('change'));
+  await settle();
+  check('re-fetched the section', calls[0][0], 'catalog');
+  check('with the chosen year', lastCatalogFilters.year, '2020');
+  check('toggle button shows an active-filter count', document.getElementById('filterToggle').textContent, 'Фильтры (1) ▾');
+  check('panel stays open across the re-render', !!document.getElementById('filterPanel'), true);
+  check('and keeps the chosen value', document.getElementById('filterYear').value, '2020');
+
+  console.log('--- resetting clears every filter in one click ---');
+  click(document.getElementById('filterReset')); await settle();
+  check('button label drops the count', document.getElementById('filterToggle').textContent, 'Фильтры ▾');
+  check('select goes back to "any"', document.getElementById('filterYear').value, '');
+
+  console.log('--- switching sections keeps its own filter set separate ---');
+  // The panel is still open from the earlier click (state.filterPanelOpen
+  // is a single global flag, not per-section) - renderTop() re-shows it on
+  // every route change, so no extra click needed here.
+  document.getElementById('filterYear').value = '2015';
+  document.getElementById('filterYear').dispatchEvent(new window.Event('change'));
+  await settle();
+  app.route('serial'); await settle();
+  check('a fresh section starts with no active filters',
+    document.querySelector('#catalogTop .filter-toggle').textContent, 'Фильтры ▾');
+  app.route('movie'); await settle();
+  check('coming back to movies remembers its own filter',
+    document.getElementById('filterYear').value, '2015');
+  click(document.getElementById('filterReset')); await settle();
+  click(document.getElementById('filterToggle')); await settle();
+  check('panel now closed', !!document.getElementById('filterPanel'), false);
+
+  console.log('--- "Закладки": real folders, not a dead sidebar link ---');
+  check('sidebar link is wired', !!document.querySelector('[data-route="bookmarks"]'), true);
+  app.route('bookmarks'); await settle();
+  check('heading', document.querySelector('#catalogTop h3').textContent, 'Закладки');
+  check('one folder card for the one real folder',
+    qa('.bookmark-folder-card .item-title').map(e => e.textContent), ['йоу']);
+  check('shows the real item count', qa('.bookmark-folder-card .item-author')[0].textContent, '5 тайтлов');
+
+  calls.length = 0;
+  click(document.querySelector('.bookmark-folder-card')); await settle();
+  check('opening a folder fetches its contents', calls[0], ['bookmarkFolder','f1',0]);
+  check('renders the folder\'s real items, same card as everywhere else',
+    qa('.media-card .item-title').map(e => e.textContent),
+    ['Как стать миллионером','Притворись моей женой']);
+  check('header names the open folder and offers a way back',
+    document.querySelector('#catalogTop h3').textContent.indexOf('йоу') >= 0, true);
+
+  click(document.getElementById('bookmarksBack')); await settle();
+  check('back returns to the folder list', qa('.bookmark-folder-card').length, 1);
+
+  console.log('--- leaving and returning to "Закладки" starts at the folder list again ---');
+  app.route('bookmarks'); await settle();
+  click(document.querySelector('.bookmark-folder-card')); await settle();
+  app.route('movie'); await settle();
+  app.route('bookmarks'); await settle();
+  check('does not reopen the last folder', qa('.bookmark-folder-card').length, 1);
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nAll checks passed');
   process.exit(failures ? 1 : 0);
