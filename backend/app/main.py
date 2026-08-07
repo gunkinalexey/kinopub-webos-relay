@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.81', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.82', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -728,6 +728,22 @@ async def kino_get(session: Dict[str, Any], path: str, params: Optional[Dict[str
     query['access_token'] = session['access_token']
     try:
         response = await app.state.http.get(f"{API_BASE}/{path.lstrip('/')}", params=query, headers={'Accept': 'application/json'})
+    except httpx.TimeoutException as exc:
+        raise HTTPException(504, 'KinoPub API timeout') from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(502, f'Could not connect to KinoPub API: {exc}') from exc
+    if response.status_code >= 400:
+        raise HTTPException(response.status_code, response.text[:1000])
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise HTTPException(502, 'KinoPub API returned invalid JSON') from exc
+
+
+async def kino_post(session: Dict[str, Any], path: str, body: Optional[Dict[str, Any]] = None) -> Any:
+    query = {'access_token': session['access_token']}
+    try:
+        response = await app.state.http.post(f"{API_BASE}/{path.lstrip('/')}", params=query, json=body or {}, headers={'Accept': 'application/json'})
     except httpx.TimeoutException as exc:
         raise HTTPException(504, 'KinoPub API timeout') from exc
     except httpx.RequestError as exc:
@@ -1580,13 +1596,60 @@ async def profile(refresh: bool = False, kp_session: Optional[str] = Cookie(defa
             return stale
         raise
 
+_device_registered_sids: set = set()
+
+
+async def _ensure_device_registered(sid: str, session: Dict[str, Any]) -> None:
+    """KinoPub shows this bridge as an "unknown"/"unknown"/"unknown" entry in
+    the account's real device list (kino.pub -> Настройки -> Устройства),
+    with 4K/HEVC support left at whatever that device record happened to
+    default to - nothing ever called `v1/device/notify` or
+    `v1/device/{id}/settings`. Verified live: each successful device-code
+    pairing gets its own fresh device id from KinoPub (repeated pairings
+    accumulate distinct ids, not one reused entry), so this is keyed to the
+    bridge's own session id and only ever runs once per session, not on
+    every request - `/auth/status` is polled far too often for a live
+    KinoPub round-trip on each call.
+    """
+    if not sid or sid in _device_registered_sids:
+        return
+    _device_registered_sids.add(sid)
+    try:
+        info = await kino_get(session, 'v1/device/info', {})
+        device = info.get('device') if isinstance(info, dict) else {}
+        if not isinstance(device, dict):
+            device = {}
+        def _known(value: Any) -> bool:
+            text = str(value or '').strip().lower()
+            return bool(text) and text != 'unknown'
+        if not (_known(device.get('title')) and _known(device.get('hardware'))):
+            await kino_post(session, 'v1/device/notify', {
+                'title': 'KinoPub webOS Bridge',
+                'hardware': 'Web Browser',
+                'software': f'kinopub-webos-client/{app.version}',
+            })
+        device_id = device.get('id')
+        settings = device.get('settings') if isinstance(device.get('settings'), dict) else {}
+        def _flag(name: str) -> bool:
+            entry = settings.get(name)
+            return bool(entry.get('value')) if isinstance(entry, dict) else False
+        if device_id and not (_flag('support4k') and _flag('supportHevc')):
+            await kino_post(session, f'v1/device/{device_id}/settings', {'support4k': True, 'supportHevc': True})
+        log_event('device', 'Device info registered with KinoPub', {'device_id': device_id})
+    except HTTPException as exc:
+        _device_registered_sids.discard(sid)
+        log_event('device', 'Device registration failed', {'status': exc.status_code})
+
+
 @app.get('/auth/status')
 # Dict[str, Any], not Dict[str, bool]: FastAPI validates the response against
 # this annotation, and `expires_in` is a number. A bool-only model made every
 # authenticated call return 500, so reloading the page looked like a lost login.
-def auth_status(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def auth_status(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
     try:
         row = session_get(kp_session)
+        if kp_session:
+            asyncio.create_task(_ensure_device_registered(kp_session, row))
         return {
             'authenticated': True,
             'credentials_configured': bool(CLIENT_ID and CLIENT_SECRET),
@@ -1625,7 +1688,9 @@ async def auth_device_poll(payload: DevicePoll, response: Response) -> Response:
     if upstream.status_code >= 400:
         raise HTTPException(upstream.status_code, data)
     sid = secrets.token_urlsafe(32)
-    session_save(sid, {'access_token': data['access_token'], 'refresh_token': data.get('refresh_token'), 'expires_at': time.time() + int(data.get('expires_in', 3600)) - 60})
+    new_session = {'access_token': data['access_token'], 'refresh_token': data.get('refresh_token'), 'expires_at': time.time() + int(data.get('expires_in', 3600)) - 60}
+    session_save(sid, new_session)
+    asyncio.create_task(_ensure_device_registered(sid, new_session))
     pending_devices.pop(payload.code, None)
     if not data.get('refresh_token'):
         log_event('auth', 'Device authorized WITHOUT a refresh token: the session will end when the access token expires', {
