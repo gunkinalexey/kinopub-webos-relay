@@ -1,5 +1,5 @@
 (function(){'use strict';
-var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:Date.now(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,bookmarkFolders:null,bookmarkFolder:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
+var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:Date.now(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,watchingView:'new',watchingItems:null,bookmarkFolders:null,bookmarkFolder:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
 var $=function(id){return document.getElementById(id);},video=$('video');
 // Every backend call that needs a session (catalog, history, profile, item
 // details...) raises a real HTTP 401 the moment the cookie is gone or
@@ -42,6 +42,60 @@ function esc(v){var d=document.createElement('div');d.textContent=String(v==null
 function fmt(s){s=isFinite(s)?Math.max(0,Math.floor(s)):0;var h=Math.floor(s/3600),m=Math.floor(s/60)%60,x=s%60;return(h?(h<10?'0':'')+h+':':'')+(m<10?'0':'')+m+':'+(x<10?'0':'')+x;}
 function visibleFocus(){var n=document.querySelectorAll('.focusable:not([disabled])'),a=[];for(var i=0;i<n.length;i++)if(n[i].offsetParent!==null)a.push(n[i]);return a;}
 function focusFirst(){var a=visibleFocus();if(a[0])a[0].focus();}
+// Where the focus ring belongs once a section has finished loading.
+//
+// This used to be plain focusFirst(), and focusFirst() means "the first
+// .focusable in the document" - which is the "Новинки" sidebar button, the
+// very first element in index.html. So *every* navigation dragged the
+// highlight back to the top of the sidebar: click "ТВ Шоу" and "Новинки"
+// lights up instead. On a remote it is worse than cosmetic - the next Down
+// press then moves to "Фильмы" rather than "Спорт", because focus is not
+// where the ring appears to be.
+//
+// `before` is whatever held focus when the navigation started, captured
+// before renderCatalog() rebuilds the header.
+//
+// Visibility here is "no .hidden ancestor" rather than `offsetParent`, which
+// is what visibleFocus() uses. `offsetParent` needs real layout, and the
+// jsdom-based tests have none - every element reads as hidden there, so an
+// offsetParent-based check silently degrades to "focus nothing" under test
+// while looking fine in a browser. `.hidden` is how this app hides screens
+// anyway (`display:none!important`), so this answers the same question
+// without needing a layout engine.
+function focusableAndShown(el){
+ if(!el||!el.classList||!el.classList.contains('focusable')||!document.body.contains(el))return false;
+ for(var n=el;n&&n!==document.body;n=n.parentNode)if(n.classList&&n.classList.contains('hidden'))return false;
+ return true;
+}
+function routeFocusTarget(name,before){
+ // The control the user actually activated, when it survived the re-render -
+ // sidebar links always do, and stealing focus off them is the whole bug.
+ // The .focusable test also rules out <body>, which is what this reads when
+ // nothing is focused at all; focusing <body> would leave the ring nowhere.
+ if(focusableAndShown(before))return before;
+ // renderTop() rebuilds the "Фильмы / 3D" toggle from scratch, so the button
+ // that was clicked is already detached; put focus on its replacement.
+ var clicked=before&&before.getAttribute&&before.getAttribute('data-route-inline');
+ if(clicked){
+  var rebuilt=document.querySelector('[data-route-inline="'+clicked+'"]');
+  if(focusableAndShown(rebuilt))return rebuilt;
+ }
+ // Nothing meaningful held focus (hash navigation, browser back/forward,
+ // first load): the entry for wherever we landed.
+ var link=document.querySelector('[data-route="'+name+'"]');
+ if(focusableAndShown(link))return link;
+ // Sections with no sidebar button of their own. "3D" only exists inside the
+ // Фильмы/3D heading toggle, and Популярные/Свежие/Горячие are tabs - without
+ // these two the fallback below sends the ring to "Новинки", which is the
+ // exact bug this function was written to stop. Reachable because pushHash()
+ // can re-enter route() with nothing focused, so the last timeout to run may
+ // not be the one that knew what the user clicked.
+ var inlineForRoute=document.querySelector('[data-route-inline="'+name+'"]');
+ if(focusableAndShown(inlineForRoute))return inlineForRoute;
+ var activeTab=document.querySelector('.catalog-tab.active');
+ if(focusableAndShown(activeTab))return activeTab;
+ return visibleFocus()[0]||null;
+}
 // The backdrop is a real 16:9 image now, so a full 1920x1080 is worth
 // asking for; posters come from the 500x750 source instead of 250x375 and
 // are no longer upscaled. `fallback` covers items with no wide backdrop.
@@ -505,24 +559,65 @@ function renderHistory(cfg){
 // episodes (KinoPub's real v1/watching/serials, not a history scan - that
 // would have meant "everything ever watched" instead of "what's new").
 function updateWatchingCount(n){var chip=$('watchingCount');if(!chip)return;chip.textContent=n>0?String(n):'';chip.classList.toggle('hidden',!n);}
+// New *episodes* waiting, not serials on the list. The badge used to show
+// `items.length`, so one subscribed show with two unwatched episodes read
+// "1" while its own card right next to it said "2 новые серии". The card was
+// right: `watching_new` is KinoPub's own per-serial count of episodes you
+// have not seen (verified live - one entry, watching_new=2, total=3,
+// watched=1). A badge on "Я смотрю" answers "how much is waiting for me",
+// which is the sum of those, and it disappears when nothing is new even
+// though the list itself is not empty - that is the point of it.
+function watchingNewCount(items){
+ var total=0;
+ for(var i=0;i<(items||[]).length;i++)total+=Math.max(0,Number(items[i].watching_new)||0);
+ return total;
+}
 // Previously only fetched when the user actually opened "Я смотрю"
 // (inside renderWatching below), so the sidebar badge stayed blank until
 // the first click - the whole point of a badge is to show the count before
 // you go looking. Fetched once at startup instead; renderWatching's own
 // fetch still runs when the section is opened (cheap, and keeps the number
 // fresh rather than trusting a load that might be minutes old).
-function loadWatchingCount(){return KPApi.watchingList().then(function(data){updateWatchingCount(((data&&data.items)||[]).length);}).catch(function(){});}
+function loadWatchingCount(){return KPApi.watchingList().then(function(data){updateWatchingCount(watchingNewCount((data&&data.items)||[]));}).catch(function(){});}
+// Two views over one list, the way kino.pub's own page does it: "Новые
+// эпизоды" (only the serials with something unwatched waiting) and "Мои
+// сериалы" (everything marked "Буду смотреть"). Both come from the single
+// `v1/watching/serials?subscribed=1` payload already being fetched - the
+// documented meaning of `subscribed=1` is exactly "сериалы отмеченные «Буду
+// смотреть»", so the second view is that payload and the first is it filtered
+// by `watching_new > 0`. No second endpoint, nothing guessed: the sweep for
+// one (`new=0`, `all=1`, `watched=1`, `/v1/watching/subscribed`,
+// `v1/items?subscribed=1`) came back either identical or 404.
+function watchingViewIsAll(){return state.watchingView==='all';}
+function renderWatchingHead(items,loading){
+ var root=$('catalogTop');root.innerHTML='';
+ var all=items||[],fresh=all.filter(function(i){return (Number(i.watching_new)||0)>0;});
+ var showingAll=watchingViewIsAll(),shown=showingAll?all:fresh;
+ var head=document.createElement('div');head.className='catalog-title-row';
+ head.innerHTML='<h3>'+(showingAll?'Мои сериалы':'Новые эпизоды')+
+  (loading?'':' <span class="title-count">'+shown.length+'</span>')+'</h3>'+
+  (loading?'':'<button id="watchingViewToggle" class="focusable filter-toggle">'+
+   (showingAll?'Новые эпизоды':'Все мои сериалы')+'</button>');
+ root.appendChild(head);
+ var toggle=$('watchingViewToggle');
+ if(toggle)toggle.onclick=function(){state.watchingView=showingAll?'new':'all';renderWatching(routes[state.route]||routes.watching);};
+ return shown;
+}
 function renderWatching(cfg){
- renderTop();
  var g=$('catalogGrid');
  g.className='poster-grid';$('catalogPagination').classList.add('hidden');
- g.innerHTML='<p class="empty-state">Загружаем…</p>';
+ // Serve the list we already have while refetching, so flipping the view is
+ // instant instead of blanking the grid for a round-trip.
+ var cached=state.watchingItems;
+ if(cached){renderCatalogItems(renderWatchingHead(cached,false));}
+ else{renderWatchingHead(null,true);g.innerHTML='<p class="empty-state">Загружаем…</p>';}
  var requestId=++state.catalogRequest;
  KPApi.watchingList().then(function(data){
   if(requestId!==state.catalogRequest)return;
   var items=(data&&data.items)||[];
-  renderCatalogItems(items);
-  updateWatchingCount(items.length);
+  state.watchingItems=items;
+  renderCatalogItems(renderWatchingHead(items,false));
+  updateWatchingCount(watchingNewCount(items));
  }).catch(function(err){
   if(requestId!==state.catalogRequest)return;
   g.innerHTML='<p class="empty-state">Не удалось загрузить раздел: '+esc(err&&err.message?err.message:String(err))+'</p>';
@@ -700,7 +795,7 @@ function applyHash(){
   applyingHistoryState=false;
  }
 }
-function route(name){if(name==='settings'){state.route=name;showScreen('settingsScreen');loadSettings();}else{resetNavigationState(name);state.route=name;showScreen('catalogScreen');renderCatalog();}var links=document.querySelectorAll('[data-route]');for(var i=0;i<links.length;i++)links[i].classList.toggle('active',links[i].getAttribute('data-route')===name || (name==='new'&&links[i].getAttribute('data-route')==='popular'));setTimeout(focusFirst,20);pushHash(encodeRouteHash(name));}
+function route(name){var before=document.activeElement;if(name==='settings'){state.route=name;showScreen('settingsScreen');loadSettings();}else{resetNavigationState(name);state.route=name;showScreen('catalogScreen');renderCatalog();}var links=document.querySelectorAll('[data-route]');for(var i=0;i<links.length;i++)links[i].classList.toggle('active',links[i].getAttribute('data-route')===name || (name==='new'&&links[i].getAttribute('data-route')==='popular'));setTimeout(function(){var target=routeFocusTarget(name,before);if(target)try{target.focus();}catch(e){}},20);pushHash(encodeRouteHash(name));}
 function detailsMediaList(item){if(item.seasons&&item.seasons.length){var all=[];for(var s=0;s<item.seasons.length;s++)all=all.concat(item.seasons[s].episodes||[]);return all;}return item.media||[];}
 function detailsTrackList(item,field){var media=detailsMediaList(item),seen={},out=[];for(var i=0;i<media.length;i++){var list=media[i][field]||[];for(var j=0;j<list.length;j++){var label=field==='audios'?detailedAudioLabel(list[j],out.length,false):detailedSubtitleLabel(list[j],out.length,false);var body=label.replace(/^\d+\.\s*/,'');if(body&&!seen[body]){seen[body]=true;out.push(body);}}}return out;}
 function detailsDurationSeconds(item){var direct=Number(item.duration);if(isFinite(direct)&&direct>0)return direct;var media=detailsMediaList(item);for(var i=0;i<media.length;i++){var d=Number(media[i].duration);if(isFinite(d)&&d>0)return d;}return 0;}
@@ -836,6 +931,40 @@ function firstUnwatchedInSeasons(seasons){
  }
  return null;
 }
+// A numbered pill per episode, the same control as the season picker one row
+// above it, so a long season is reachable in one press instead of paging the
+// carousel. Watched episodes are filled green (the same signal the card's
+// "ПРОСМОТРЕНО" overlay carries), a part-watched one is outlined instead -
+// they are genuinely different states and collapsing them would hide exactly
+// the episode you stopped in the middle of.
+//
+// Clicking a pill scrolls the strip to that episode and focuses its card
+// rather than starting playback: the season pill next to it switches what is
+// shown too, and a control that starts a video from a row of small numbers
+// would be an easy mis-press on a remote.
+function buildEpisodePills(episodes,carousel,strip){
+ var bar=document.createElement('div');bar.className='details-episodes-pills';
+ var label=document.createElement('span');label.className='details-seasons-label';label.textContent='Серии:';
+ bar.appendChild(label);
+ for(var i=0;i<episodes.length;i++){
+  var entry=episodes[i];
+  var pill=document.createElement('button');
+  // Its own class, not the season pill's: they look alike but they are
+  // different controls, and sharing the class made ".season-pill" mean
+  // "season or episode" for anything querying the DOM.
+  pill.className='focusable episode-pill'+
+   (episodeWatched(entry)?' watched':(resumableRow(episodeProgress(entry))?' partial':''));
+  pill.textContent=String(entry.episode||entry.number||i+1);
+  pill.setAttribute('data-episode-index',String(i));
+  pill.onclick=(function(index){return function(){
+   carousel.showIndex(index);
+   var card=strip.children[index];
+   if(card&&card.focus)setTimeout(function(){try{card.focus();}catch(e){}},0);
+  };}(i));
+  bar.appendChild(pill);
+ }
+ return bar;
+}
 // Three shapes, matched to what KinoPub actually sent:
 //  - 2+ real seasons  -> season pills, each with its own episode strip;
 //  - 1 season (or none, e.g. a flat multi-file miniseries) with 2+ episodes
@@ -856,6 +985,11 @@ function renderDetailsEpisodes(item){
    strip.innerHTML='';
    var episodes=(seasons[index]&&seasons[index].episodes)||[];
    for(var e=0;e<episodes.length;e++)strip.appendChild(episodeCard(item,episodes[e],e));
+   // Rebuilt per season, not once: episode numbers and their watched marks
+   // belong to the season being shown.
+   var oldPills=root.querySelector('.details-episodes-pills');
+   var pills=buildEpisodePills(episodes,carousel,strip);
+   if(oldPills)root.replaceChild(pills,oldPills);else root.insertBefore(pills,carousel);
    carousel.refresh(true);
   }
   for(var s=0;s<seasons.length;s++){
@@ -888,6 +1022,7 @@ function renderDetailsEpisodes(item){
  var flatStrip=document.createElement('div');flatStrip.className='episode-strip';
  for(var m=0;m<episodes.length;m++)flatStrip.appendChild(episodeCard(item,episodes[m],m));
  var flatCarousel=wireEpisodeCarousel(flatStrip);
+ root.appendChild(buildEpisodePills(episodes,flatCarousel,flatStrip));
  root.appendChild(flatCarousel);
  flatCarousel.refresh();
  if(state.detailsProgress||state.detailsWatching){

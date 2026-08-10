@@ -50,7 +50,10 @@ global.KPApi = {
     return Promise.resolve({items:HISTORY[type||'']||[],page:page||0,total_pages:2,total_items:4,has_next:true}); },
   genres:(type)=>{ calls.push(['genres',type]); return Promise.resolve({genres:GENRES}); },
   countries:()=>Promise.resolve({countries:COUNTRIES}),
-  watchingList:()=>Promise.resolve({items:[{id:'w1'},{id:'w2'},{id:'w3'}]}),
+  // Three subscribed serials, five unwatched episodes between them: the
+  // badge counts episodes, not shows, so these two numbers must not be
+  // interchangeable in the fixture or the test proves nothing.
+  watchingList:()=>Promise.resolve({items:[{id:'w1',watching_new:2},{id:'w2',watching_new:0},{id:'w3',watching_new:3}]}),
   bookmarkFolders:()=>Promise.resolve({folders:FOLDERS}),
   bookmarkFolder:(id,page)=>{ calls.push(['bookmarkFolder',id,page]);
     return Promise.resolve({folder:{id,title:'йоу'},items:FOLDER_ITEMS,page:page||0,total_pages:1,total_items:5,has_next:false,perpage:48}); },
@@ -154,8 +157,43 @@ const bubbles = name => {
   const badge = document.getElementById('watchingCount');
   check('starts blank/hidden, nothing fetched yet', badge.classList.contains('hidden'), true);
   await app.loadWatchingCount();
-  check('shows the real count after the startup fetch', badge.textContent, '3');
+  // Reported from the TV: one subscribed show with two unwatched episodes
+  // showed "1" on the badge while its own card said "2 новые серии". The card
+  // was right - `watching_new` is KinoPub's per-serial count of episodes not
+  // yet seen, and the badge was counting list entries instead.
+  check('counts new episodes, not serials, after the startup fetch', badge.textContent, '5');
   check('and is visible', badge.classList.contains('hidden'), false);
+
+  // Reported from the TV: picking "ТВ Шоу" left the highlight sitting on
+  // "Новинки". Cause was route() ending in focusFirst(), i.e. "focus the
+  // first .focusable in the document" - and that is literally the "Новинки"
+  // button, the first element in index.html. Cosmetic with a mouse, broken
+  // with a remote: the ring is not where focus actually is, so the next Down
+  // press moves from the wrong place.
+  console.log('--- navigating must not drag the focus ring to the first sidebar button ---');
+  const sideLink = t => qa('.side-link').find(b => b.textContent.trim() === t);
+  sideLink('ТВ Шоу').focus();
+  click(sideLink('ТВ Шоу'));
+  await settleRange();
+  check('focus stays on the section that was picked',
+    document.activeElement.textContent.trim(), 'ТВ Шоу');
+  check('and the green marker is on the same one',
+    document.querySelector('.side-link.active').textContent.trim(), 'ТВ Шоу');
+  // Hash navigation, browser back/forward and first load arrive with nothing
+  // focused; then the ring should land on where we ended up.
+  document.activeElement.blur();
+  app.route('anime'); await settleRange();
+  check('with nothing focused it lands on the new section, not on "Новинки"',
+    document.activeElement.textContent.trim(), 'Аниме');
+  // "3D" has no sidebar button of its own - it only exists inside the
+  // Фильмы/3D heading toggle, which renderTop() rebuilds on every
+  // navigation, so the clicked node is detached by the time focus is placed.
+  document.activeElement.blur();
+  app.route('movie'); await settleRange();
+  const inline3d = document.querySelector('[data-route-inline="3d"]');
+  inline3d.focus(); click(inline3d); await settleRange();
+  check('the 3D heading toggle keeps focus instead of falling back to the sidebar',
+    document.activeElement.textContent.trim(), '3D');
 
   console.log('--- filter panel: real options, not the old dead stub ---');
   app.route('movie'); await settle();

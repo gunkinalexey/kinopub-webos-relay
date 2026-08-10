@@ -77,6 +77,28 @@ check('episode cards carry no SxxEyy code (no real season data)',
 check('episode titles present', qa('.episode-name').map(e => e.textContent), ['Часть 1','Часть 2','Часть 3']);
 check('resume label falls back to the plain title',
   app.episodeLabel(FLAT, FLAT.media[1]), 'Часть 2');
+// One numbered button per episode, the same control as the season picker.
+// Its own class, not `.season-pill` - they look alike but a query for season
+// pills must not pick up episodes.
+check('an episode pill per episode', qa('.episode-pill').map(p => p.textContent), ['1','2','3']);
+check('episode pills are not season pills', qa('.season-pill').length, 0);
+check('nothing is marked watched without any progress data',
+  qa('.episode-pill.watched').length, 0);
+
+console.log('--- watched and part-watched episodes are marked differently ---');
+// e1 finished, e2 stopped in the middle, e3 never opened. "Watched" and
+// "resume this one" are genuinely different states; collapsing them would
+// hide exactly the episode the user stopped in.
+app.state.detailsProgress = { items: [
+  { episode_id: 'e1', position: 1200, duration: 1200, completed: true },
+  { episode_id: 'e2', position: 400,  duration: 1200, completed: false },
+]};
+app.renderEpisodes(FLAT);
+check('finished episode is filled',
+  qa('.episode-pill').map(p => p.classList.contains('watched')), [true,false,false]);
+check('part-watched episode is outlined instead',
+  qa('.episode-pill').map(p => p.classList.contains('partial')), [false,true,false]);
+app.state.detailsProgress = null;
 
 console.log('--- real multi-season series keeps the season picker ---');
 const SERIES = {
@@ -89,6 +111,8 @@ const SERIES = {
 app.renderEpisodes(SERIES);
 check('season pills shown', qa('.season-pill').map(p => p.textContent), ['1','2']);
 check('first season strip has its episode', qa('.episode-card').length, 1);
+check('episode pills follow the shown season, not the whole series',
+  qa('.episode-pill').map(p => p.textContent), ['1']);
 check('SxxEyy code shown for a real multi-season title',
   qa('.episode-code').map(e => e.textContent), ['S01E01']);
 check('resume label includes the SxxEyy prefix',

@@ -92,7 +92,7 @@ inside the backend container instead (see "Verifying live" below).
   hook (see below) picks them up at the end of the current turn if this
   handoff is being read mid-session; if you're starting fresh, they're
   probably already committed.
-- **252 frontend checks + 24 backend smoke checks, all green** (see Testing
+- **262 frontend checks + 24 backend smoke checks, all green** (see Testing
   below)
 
 ## How work has been happening (read this before doing anything)
@@ -166,8 +166,21 @@ an honest smaller filter panel than a bigger one with dead switches.
 
 ## Everything fixed/built, most recent first (README.md has full prose, this is the map)
 
-Backend 0.9.79 → 0.9.90 this stretch, frontend tests 159 → 252:
+Backend 0.9.79 → 0.9.90 this stretch, frontend tests 159 → 262:
 
+18. **Four TV-reported UI fixes** (frontend only, no backend change):
+    navigation no longer drags the focus ring to the first sidebar button
+    (`route()` ended in `focusFirst()`, and the first `.focusable` in
+    index.html is literally "Новинки" - cosmetic with a mouse, broken with a
+    remote); the "Я смотрю" badge counts new *episodes* (`watching_new`)
+    instead of list entries; "Я смотрю" gained kino.pub's "Все мои сериалы"
+    toggle (both views come from the one `subscribed=1` payload - a sweep for
+    a separate endpoint found only ignored params and 404s); and the details
+    screen gained a "Серии:" pill row mirroring the season picker, watched
+    filled green, part-watched outlined. Note for future work: `offsetParent`
+    is useless as a visibility test under jsdom (no layout - everything reads
+    hidden), so DOM-visibility checks that tests must exercise go by
+    "no `.hidden` ancestor" instead.
 17. **Filter panel rebuilt to look like kino.pub's own**, and the two rating
     ranges turned out to be real after all - `conditions[]` accepts
     `imdb_rating` and `kinopoisk_rating` (item #15 below says they do not
