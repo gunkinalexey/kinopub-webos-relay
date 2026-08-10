@@ -99,6 +99,8 @@ with TestClient(app, raise_server_exceptions=False) as client:
 
     check('/catalog/watching/subscribed is wired',
           '/catalog/watching/subscribed' in schema['paths'], sorted(schema['paths'])[:12])
+    check('/catalog/items/{item_id}/similar is wired',
+          '/catalog/items/{item_id}/similar' in schema['paths'], sorted(schema['paths'])[:12])
 
     r = client.get('/history')
     check('GET /history (local progress)', r.status_code == 200, f'HTTP {r.status_code} {r.text[:120]}')

@@ -26,6 +26,8 @@ global.clearInterval = () => {};
 
 const ITEM = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixture.json'), 'utf8'));
 
+let similarCalls = [];
+let similarAnswer = () => Promise.resolve({ items: [] });
 global.KPApi = {
   status: () => new Promise(() => {}), settings: () => new Promise(() => {}),
   profile: () => new Promise(() => {}), report: () => Promise.resolve(),
@@ -33,6 +35,10 @@ global.KPApi = {
   hlsAudioVariants: () => Promise.resolve({ count: 0 }), createAudioHls: () => new Promise(() => {}),
   audioHlsStatus: () => new Promise(() => {}), stopAudioHls: () => Promise.resolve({}),
   item: () => Promise.resolve(ITEM),
+  // Similar titles: what the stub answers is switched per test, because both
+  // answers matter - a populated one and the empty one that most of the
+  // catalogue actually returns.
+  similar: (id) => { similarCalls.push(id); return similarAnswer(); },
   history: () => Promise.resolve({items:[{media_id:'77035',episode_id:'813841',position:754,duration:2640,completed:0,updated_at:200}]}),
   imageProxyUrl: u => u, streamProxyUrl: u => u, hlsProxyUrl: u => u, subtitleProxyUrl: u => u,
 };
@@ -41,7 +47,8 @@ window.KPApi = global.KPApi;
 const src = fs.readFileSync(APP_JS, 'utf8');
 eval(src.replace('}());', 'global.__app={renderDetails:renderDetails,openDetails:openDetails,'
   + 'closeDetails:closeDetails,showScreen:showScreen,visibleScreen:visibleScreen,route:route,'
-  + 'loadProgress:loadItemProgress,renderActions:renderDetailsActions,state:state};}());'));
+  + 'loadProgress:loadItemProgress,renderActions:renderDetailsActions,'
+  + 'loadSimilar:loadSimilar,state:state};}());'));
 
 (async () => {
 global.__app.renderDetails(ITEM);
@@ -135,6 +142,45 @@ check('switching screens hides details', [vis('settingsScreen'), vis('detailsScr
 
 check('only ever one screen visible',
   ['catalogScreen','searchScreen','settingsScreen','detailsScreen'].filter(vis).length, 1);
+
+// "Похожие" is KinoPub's own recommendation list (v1/items/similar). Only
+// about a third of the catalogue has one at all - measured live, fresh
+// serials 1 in 15 - so the section has to disappear rather than stand there
+// empty, and no genre-based stand-in is invented to fill it.
+console.log('--- "Похожие" ---');
+const similarBlock = () => document.getElementById('detailsSimilarBlock');
+const similarCards = () => [...document.querySelectorAll('#detailsSimilar .media-card')];
+
+similarCalls = [];
+similarAnswer = () => Promise.resolve({ items: [] });
+global.__app.loadSimilar({ id: '82354', title: 'Дом дракона' });
+await new Promise(r => setTimeout(r, 20));
+check('asked KinoPub for this title', similarCalls, ['82354']);
+check('an empty answer hides the section entirely', similarBlock().classList.contains('hidden'), true);
+check('and leaves no cards behind', similarCards().length, 0);
+
+similarAnswer = () => Promise.resolve({ items: [
+  { id: '91', title: 'Властелин колец', poster: '', year: 2001 },
+  { id: '92', title: 'Хоббит', poster: '', year: 2012 },
+]});
+global.__app.loadSimilar({ id: '8740', title: 'Игра престолов' });
+await new Promise(r => setTimeout(r, 20));
+check('a populated answer shows the section', similarBlock().classList.contains('hidden'), false);
+check('one card per similar title',
+  similarCards().map(c => c.querySelector('.item-title').textContent), ['Властелин колец','Хоббит']);
+
+// Opening a second title before the first answer arrives must not drop that
+// answer under the title now on screen.
+let release;
+similarAnswer = () => new Promise(r => { release = r; });
+global.__app.loadSimilar({ id: 'slow', title: 'Медленный' });
+similarAnswer = () => Promise.resolve({ items: [{ id: '99', title: 'Актуальный', poster: '' }] });
+global.__app.loadSimilar({ id: 'fast', title: 'Быстрый' });
+await new Promise(r => setTimeout(r, 20));
+release({ items: [{ id: '1', title: 'Устаревший', poster: '' }] });
+await new Promise(r => setTimeout(r, 20));
+check('a late answer for the previous title is discarded',
+  similarCards().map(c => c.querySelector('.item-title').textContent), ['Актуальный']);
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);

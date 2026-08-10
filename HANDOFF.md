@@ -69,7 +69,7 @@ read-only — **frontend changes are live immediately, no rebuild**.
 
 Backend version string lives at `app = FastAPI(..., version='0.9.NN', ...)`
 in `main.py` near the top; bump it whenever `backend/` changes so `/health`
-reflects what's actually deployed. **Currently: backend 0.9.91.**
+reflects what's actually deployed. **Currently: backend 0.9.92.**
 
 The real upstream API is `https://api.service-kp.com` (`API_BASE`). Docs at
 kinoapi.com are patchy and the domain is **intermittently unreachable via
@@ -86,13 +86,13 @@ inside the backend container instead (see "Verifying live" below).
 ## Current state
 
 - Branch: `rework/audio-subtitles-details` (not merged to `main`)
-- Backend running version: **0.9.91**, containers up via `docker compose up -d`
+- Backend running version: **0.9.92**, containers up via `docker compose up -d`
 - `curl http://localhost:8080/bridge/health` to check it's alive
 - Working tree has uncommitted changes at handoff time — the auto-commit
   hook (see below) picks them up at the end of the current turn if this
   handoff is being read mid-session; if you're starting fresh, they're
   probably already committed.
-- **269 frontend checks + 25 backend smoke checks, all green** (see Testing
+- **276 frontend checks + 26 backend smoke checks, all green** (see Testing
   below)
 
 ## How work has been happening (read this before doing anything)
@@ -166,8 +166,15 @@ an honest smaller filter panel than a bigger one with dead switches.
 
 ## Everything fixed/built, most recent first (README.md has full prose, this is the map)
 
-Backend 0.9.79 → 0.9.91 this stretch, frontend tests 159 → 269:
+Backend 0.9.79 → 0.9.92 this stretch, frontend tests 159 → 276:
 
+20. **"Похожие" section on the details card** (`v1/items/similar?id=`, the
+    endpoint the user supplied). Real endpoint - 400 without `id`, 404 for a
+    bogus one - but **empty for roughly two thirds of the catalogue**
+    (measured: fresh serials 1/15, oldest serials 9/15; "Дом дракона" returns
+    nothing even though kino.pub's own page shows a Похожие block for it, so
+    the site fills that from something else). The block is built only when
+    the answer is non-empty; no genre-based stand-in was invented to fill it.
 19. **"Мои сериалы" showed 2 of 4** — and the cause was a wrong inference in
     item #18, not a coding slip. `v1/watching/serials?subscribed=1` is not the
     watchlist: the *endpoint* is titled "Список сериалов с новыми/не

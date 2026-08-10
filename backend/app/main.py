@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.91', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.92', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -1397,6 +1397,34 @@ async def catalog_watching_subscribed(kp_session: Optional[str] = Cookie(default
     }
     subscribed_cache[cache_key] = {'at': time.time(), 'result': result}
     return result
+
+
+@app.get('/catalog/items/{item_id}/similar')
+async def catalog_item_similar(item_id: str, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """KinoPub's own "похожие" list for one title (`v1/items/similar?id=`).
+
+    A real, dedicated endpoint - it validates like one (400 without `id`, 404
+    for an id that does not exist) rather than quietly ignoring the parameter
+    the way several other "obvious" filters do.
+
+    **It is genuinely empty for most of the catalogue**, which the caller has
+    to handle rather than treat as an error. Measured live over 60 titles:
+    fresh films 3/15, fresh serials 1/15, most-viewed films 7/15, the oldest
+    serials 9/15 - so roughly a third overall, skewed towards older and
+    popular entries. "Дом дракона" returns nothing at all even though
+    kino.pub's own site shows a Похожие block for it, so the site is filling
+    that from something other than this endpoint. Rather than invent a
+    genre-based stand-in and pass it off as KinoPub's recommendations, this
+    returns exactly what the API gives and the UI hides the section when the
+    list comes back empty.
+    """
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    payload = await kino_get(session, 'v1/items/similar', {'id': item_id})
+    raw_items = payload.get('items') if isinstance(payload, dict) else None
+    items = [normalize_catalog_item(raw) for raw in (raw_items or []) if isinstance(raw, dict)]
+    items = [item for item in items if item['id']]
+    log_event('catalog', 'Similar titles loaded', {'item_id': item_id, 'count': len(items)})
+    return {'items': items, 'total_items': len(items)}
 
 
 @app.get('/catalog/tv')

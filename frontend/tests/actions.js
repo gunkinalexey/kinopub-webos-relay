@@ -52,8 +52,12 @@ const click = el => el.dispatchEvent(new window.MouseEvent('click', { bubbles: t
 
   const body = document.querySelector('#detailsScreen .details-body');
   const order = [...body.children].map(c => c.id || c.className);
+  // detailsSimilarBlock is last on purpose and starts hidden: "Похожие" is
+  // a footer to the card, and most titles have no similar list at all.
   check('order under the headline', order,
-    ['detailsActions', 'detailsEpisodes', 'details-grid']);
+    ['detailsActions', 'detailsEpisodes', 'details-grid', 'detailsSimilarBlock']);
+  check('and Похожие starts hidden until something comes back',
+    document.getElementById('detailsSimilarBlock').classList.contains('hidden'), true);
   // Vote buttons legitimately live in the aside (next to the poster) - the
   // invariant this guards is that Watch/Continue never drifts back in there.
   check('poster column no longer holds a play button',
