@@ -9,7 +9,20 @@ a specific past change.
 None blocking. Nothing is mid-conversation or waiting on the user right now.
 Two things worth knowing about on pickup:
 
-1. **HDR/direct root cause found and fixed; real-TV retest still pending.**
+1. **`.env`'s `WITH_FFMPEG` is currently `0`** (backend running without
+   FFmpeg - `/health` shows `"ffmpeg": false`). This was set to `0` by the
+   user directly, between turns, apparently to try the no-FFmpeg build added
+   this session (item #21 below); never confirmed whether that was meant to
+   stick or was just testing. The only user-visible effect is the last rung
+   of the audio-track ladder (`/audio-hls/jobs`, the server-side remux for a
+   stream that genuinely carries just one audio track) being unavailable -
+   the player already handles this gracefully (asks first, shows a real
+   reason instead of a failed request), so nothing is broken, but it is
+   worth asking the user whether they want `WITH_FFMPEG=1` back before
+   assuming the current state is intentional. Changing it needs
+   `docker compose up -d --build backend`, not a restart.
+
+2. **HDR/direct root cause found and fixed; real-TV retest still pending.**
    The previous handoff blamed `watchDirectStall()` for this. That was
    wrong — the watchdog change shipped and the user came back with the same
    report ("не запускается direct и не цепляется hdr"). The actual cause was
@@ -42,26 +55,11 @@ Two things worth knowing about on pickup:
    (`readyState 0`, no bytes, fetch times out), while the exact same URL
    returns `206 Partial Content` from the host and from the backend
    container. Do not read a sandbox direct-playback failure as a bug.
-2. **"Новые эпизоды" and "Награды" sidebar buttons removed outright** (not
-   just left dead). Same root cause for both: real kino.watch site features
-   with no API equivalent, confirmed live, not guessed. "Новые эпизоды" -
-   kino.watch's own page for it (`/media/new-serial-episodes?type=...`) is a
-   catalogue-wide per-episode feed that's fully server-rendered on
-   kino.watch's own backend, zero client-side XHR to sniff (confirmed live,
-   checking real network requests) and not in any of kinoapi.com's
-   documented pages under any name tried. "Награды" - `v1/award`/`v1/awards`/
-   `v1/award/categories` all 404 live; no item field carries award/nomination
-   data (`v1/items/{id}` keys checked directly); no `v1/collections` entry
-   resembles an awards list either; `kinoapi.com/api_references.html` (the
-   page that *would* list something like an award-category reference,
-   parallel to genres/countries) has no such thing. Ceremony/year/category/
-   winner is kino.watch's own curation, not `api.service-kp.com` data.
-   User was offered three options (defer like a prior open item, remove the
-   button, or a different idea) and chose **remove** for both - done: buttons
-   deleted from `index.html` along with the now-unused `i-award` SVG symbol
-   (`i-new` stays, "Новинки" still uses it). If either is revisited, this is
-   the same "categorically cannot work via the API-bridging approach this
-   project uses" finding as before, not a "wasn't tried yet."
+
+(Everything else that came up this stretch - "Награды"/"Новые эпизоды" removed,
+"Подборки" wired for real, the details-screen link badges, the search `field`
+bug fix, etc. - is resolved, not open. See the numbered map below for what and
+why; no follow-up needed on any of it.)
 
 ## What this project is
 
@@ -396,12 +394,13 @@ Backend 0.9.79 → 0.9.97 this stretch, frontend tests 159 → 312:
   `v1/watching` data; the Continue button's own resume position still only
   reads this bridge's local SQLite, never KinoPub's own cross-device
   position.
-- ~~FFmpeg removability still an open question.~~ **Resolved** - see item #21; `WITH_FFMPEG=0` in `.env` builds without it.
+- ~~FFmpeg removability still an open question.~~ **Resolved** - see item #21; `WITH_FFMPEG=0` in `.env` builds without it (currently how the running backend is built — see open item #1 at the top).
 - ~~`v1/collections` (real curated collections/подборки, "Подборки" sidebar
   button still dead) — confirmed-real, unused endpoint. Not requested yet.~~
   **Resolved** — see item #23; "Подборки" is wired for real.
-- **"Новые эпизоды"** — see open item #2 at the top.
-- **HDR real-TV confirmation** — see open item #1 at the top.
+- ~~"Новые эпизоды" sidebar link still dead~~ **Resolved** — see item #25;
+  removed outright (confirmed live, no API equivalent exists).
+- **HDR real-TV confirmation** — see open item #2 at the top.
 - **backend/app/__pycache__/main.cpython-311.pyc is tracked in git** and
   changes on every `py_compile`. Should be gitignored; flagged to the user,
   not yet addressed as of this handoff.
@@ -415,7 +414,9 @@ functions under test on `global.__app`. Four use hand-rolled DOM stubs (fast,
 no deps: `harness.js`, `subs.js`, `misc.js`, `quality.js`); four
 (`sections.js`, `actions.js`, `episodes.js`, `panel.js`) load the real
 `index.html` into `jsdom`. See `frontend/tests/README.md` for the per-file
-breakdown. **223 checks, 0 failures.**
+breakdown. **312 checks, 0 failures** as of backend 0.9.97 (this count moves
+every session — check `frontend/tests/README.md`'s own header for the true
+current number rather than trusting this one long-term).
 
 Run via PowerShell (Bash mangles Windows paths for `docker run`):
 ```powershell
@@ -434,7 +435,9 @@ browser,es2020 --parser-options=ecmaVersion:2020 --rule
 
 **Backend**: `backend/smoke_test.py`. Boots the real FastAPI app with a
 seeded SQLite session, hits every endpoint that doesn't need live KinoPub.
-**17 checks, 0 failures**. Run via PowerShell:
+**36 checks, 0 failures** as of backend 0.9.97 (same caveat as the frontend
+count above — check the actual run output, this number only moves forward).
+Run via PowerShell:
 ```powershell
 docker run --rm -v "D:\pets\kinopub-webos-client\backend:/src:ro" -w /app kinopub-webos-client-backend sh -c "cp /src/smoke_test.py . && rm -rf /app/app && cp -r /src/app /app/app && python -m py_compile app/main.py && python smoke_test.py"
 ```
@@ -461,13 +464,13 @@ a framework, unless asked.
 ## If you're picking this up cold, do this first
 
 1. **Read the two open items at the very top of this file.** Neither is
-   fully blocking, but the HDR one needs the user's real-TV confirmation
-   before it can be called done, and "Новые эпизоды" needs a decision if it
-   comes up again (don't re-derive from scratch — the finding that it's
-   unreachable via docs *and* has no client-visible XHR to sniff is solid).
+   fully blocking: item #1 is a one-question check-in with the user about
+   whether `WITH_FFMPEG=0` in `.env` was meant to stick; item #2 (HDR) needs
+   the user's real-TV confirmation before it can be called done.
 2. `cd D:/pets/kinopub-webos-client && git log --oneline -5` and
    `curl http://localhost:8080/bridge/health` — confirm what's actually
-   running vs. what's in git. Expect backend `0.9.88`.
+   running vs. what's in git. Expect backend `0.9.97`, `"ffmpeg": false`
+   (see open item #1 — that's the current, possibly-unintended, state).
 3. Skim `README.md` top-to-bottom (newest-first) for full prose behind any
    bullet in the "Everything fixed" map above.
 4. If touching `frontend/app.js`: run the suite in `frontend/tests/` before
