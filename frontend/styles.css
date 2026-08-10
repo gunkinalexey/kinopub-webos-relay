@@ -45,6 +45,18 @@
 /* v0.9.26: selectable application identity */
 .icon-picker-field{grid-column:1/-1;border:1px solid #30394d;border-radius:8px;padding:14px;margin:0;min-width:0}
 .icon-picker-field legend{padding:0 7px;color:#cbd2df}
+.server-row{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.server-pick{flex:1;min-width:190px;display:flex;flex-direction:column;gap:8px}
+.server-results{margin-top:12px}
+.server-results:empty{margin-top:0}
+.server-line{display:flex;align-items:center;gap:10px;padding:7px 9px;border-radius:6px;background:#141a26;font-size:13px}
+.server-line+.server-line{margin-top:6px}
+.server-line.best{background:#1c2b2b;box-shadow:inset 0 0 0 1px var(--kp-ok)}
+.server-line.down{color:#e8807c}
+.server-line .server-name{flex:1;min-width:0;color:#e8ebf1}
+.server-line .server-stat{color:#9aa3b5;white-space:nowrap}
+.server-line .server-badge{color:#4fd99a;font-weight:700;white-space:nowrap}
+.server-note{margin-top:8px;color:#8f98aa;font-size:12px}
 .app-icon-picker{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:12px}
 .app-icon-option{position:relative;display:flex!important;flex-direction:column!important;align-items:center;justify-content:center;gap:8px!important;padding:12px;border:2px solid #30394d;border-radius:8px;background:#151b28;color:#cbd2df;text-align:center}
 .app-icon-option input{position:absolute;opacity:0;pointer-events:none}

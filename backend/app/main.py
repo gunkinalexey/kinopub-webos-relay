@@ -8,6 +8,7 @@ import secrets
 import shutil
 import socket
 import sqlite3
+import ssl
 import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -157,7 +158,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.98', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.99', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -230,6 +231,18 @@ class ProgressPayload(BaseModel):
     episode_number: Optional[int] = None
 
 
+class ServerSelectPayload(BaseModel):
+    # Reference id from `v1/references/server-location` (1=Нидерланды,
+    # 3=Россия live today), not the two-letter location code.
+    id: int
+
+
+class ServerMeasurePayload(BaseModel):
+    # When true the fastest location stays selected once the run finishes;
+    # otherwise whatever was selected before the run is put back.
+    apply_best: bool = True
+
+
 class AudioHlsPayload(BaseModel):
     url: str
     # Zero-based position inside media.audios, not KinoPub's audios[].index.
@@ -289,6 +302,59 @@ async def refresh_if_needed(sid: str, session: Dict[str, Any]) -> Dict[str, Any]
     log_event('auth', 'Access token refreshed')
     return session
 
+
+
+# KinoPub can invalidate an access token well before the `expires_in` it
+# handed out - observed live: `/auth/status` still reported ~24h left while
+# every real API call came back `{"status":401,"error":"unauthorized"}`.
+# `refresh_if_needed` only looks at the clock, so nothing ever refreshed and
+# the session stayed dead until the stored deadline finally passed. The fix is
+# to treat an upstream 401 itself as the signal, refresh once, and retry.
+_refresh_locks: Dict[str, asyncio.Lock] = {}
+
+
+async def _refresh_now(session: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Refresh this session's token regardless of its stored expiry.
+
+    Returns the refreshed session, or ``None`` when there is nothing to
+    refresh with (no sid/refresh token) or KinoPub refused - callers then
+    surface the original 401 rather than pretending recovery happened.
+    """
+    sid = str(session.get('sid') or '')
+    if not sid or not session.get('refresh_token'):
+        return None
+    lock = _refresh_locks.get(sid)
+    if lock is None:
+        lock = _refresh_locks[sid] = asyncio.Lock()
+    async with lock:
+        try:
+            current = session_get(sid)
+        except HTTPException:
+            return None
+        # A parallel request may have refreshed while this one waited; its
+        # new token is already saved, so reuse it instead of burning the
+        # rotated refresh token a second time.
+        if current.get('access_token') != session.get('access_token'):
+            return current
+        refresh_token = current.get('refresh_token')
+        if not refresh_token:
+            return None
+        params = {'grant_type': 'refresh_token', 'client_id': CLIENT_ID,
+                  'client_secret': CLIENT_SECRET, 'refresh_token': refresh_token}
+        try:
+            upstream = await app.state.http.post(f'{API_BASE}/oauth2/token', params=params)
+        except httpx.RequestError:
+            return None
+        if upstream.status_code >= 400:
+            log_event('auth', 'Token refresh after 401 refused', {'status': upstream.status_code})
+            return None
+        data = upstream.json()
+        current.update({'access_token': data['access_token'],
+                        'refresh_token': data.get('refresh_token', refresh_token),
+                        'expires_at': time.time() + int(data.get('expires_in', 3600)) - 60})
+        session_save(sid, current)
+        log_event('auth', 'Access token refreshed after upstream 401')
+        return current
 
 
 def _pick_first(value: Any, keys: List[str], default: Any = None) -> Any:
@@ -776,7 +842,7 @@ def choose_best_stream(streams: List[Dict[str, Any]]) -> Optional[Dict[str, Any]
     return sorted(streams, key=score)[0]
 
 
-async def kino_get(session: Dict[str, Any], path: str, params: Optional[Dict[str, Any]] = None) -> Any:
+async def kino_get(session: Dict[str, Any], path: str, params: Optional[Dict[str, Any]] = None, retry_auth: bool = True) -> Any:
     query = dict(params or {})
     query['access_token'] = session['access_token']
     try:
@@ -785,6 +851,11 @@ async def kino_get(session: Dict[str, Any], path: str, params: Optional[Dict[str
         raise HTTPException(504, 'KinoPub API timeout') from exc
     except httpx.RequestError as exc:
         raise HTTPException(502, f'Could not connect to KinoPub API: {exc}') from exc
+    if response.status_code == 401 and retry_auth:
+        refreshed = await _refresh_now(session)
+        if refreshed:
+            session.update(refreshed)
+            return await kino_get(session, path, params, retry_auth=False)
     if response.status_code >= 400:
         raise HTTPException(response.status_code, response.text[:1000])
     try:
@@ -793,7 +864,7 @@ async def kino_get(session: Dict[str, Any], path: str, params: Optional[Dict[str
         raise HTTPException(502, 'KinoPub API returned invalid JSON') from exc
 
 
-async def kino_post(session: Dict[str, Any], path: str, body: Optional[Dict[str, Any]] = None) -> Any:
+async def kino_post(session: Dict[str, Any], path: str, body: Optional[Dict[str, Any]] = None, retry_auth: bool = True) -> Any:
     query = {'access_token': session['access_token']}
     try:
         response = await app.state.http.post(f"{API_BASE}/{path.lstrip('/')}", params=query, json=body or {}, headers={'Accept': 'application/json'})
@@ -801,6 +872,11 @@ async def kino_post(session: Dict[str, Any], path: str, body: Optional[Dict[str,
         raise HTTPException(504, 'KinoPub API timeout') from exc
     except httpx.RequestError as exc:
         raise HTTPException(502, f'Could not connect to KinoPub API: {exc}') from exc
+    if response.status_code == 401 and retry_auth:
+        refreshed = await _refresh_now(session)
+        if refreshed:
+            session.update(refreshed)
+            return await kino_post(session, path, body, retry_auth=False)
     if response.status_code >= 400:
         raise HTTPException(response.status_code, response.text[:1000])
     try:
@@ -2291,6 +2367,301 @@ async def device_state(kp_session: Optional[str] = Cookie(default=None)) -> Dict
                   for name in ('supportHevc', 'support4k', 'supportHdr', 'supportSsl')},
         'streaming_type': selected,
     }
+
+
+# --- CDN server selection -------------------------------------------------
+#
+# KinoPub hands out stream URLs from one of several CDN regions, chosen by the
+# `serverLocation` entry of the account's *device* settings - the same record
+# `/device/capabilities` already writes to. Verified live by flipping it and
+# re-reading `v1/items/100468`:
+#
+#     serverLocation=1 (Нидерланды) -> <uuid>.ams-static-NN.cdntogo.net
+#     serverLocation=3 (Россия)     -> <uuid>.msk-static-NN.cdntogo.net
+#
+# so the choice really does move the bytes, it is not a cosmetic label. The
+# reference list is `v1/references/server-location`; it returned exactly those
+# two entries, and this code reads it rather than hardcoding them so a third
+# region appearing upstream needs no change here.
+#
+# Measurement is deliberately server-side. The bridge proxies HLS/relay
+# playback itself, so the backend's own path to the CDN is the one that
+# decides throughput for everything except `direct`, and it is the only path
+# that can be measured honestly from here at all - the browser pane's route to
+# `*.cdntogo.net` is known-broken in this sandbox while the container's works
+# (see HANDOFF.md). What this does NOT measure is a TV's own direct-play route
+# to the CDN; the frontend says so rather than implying otherwise.
+SERVER_MEASURE_BYTES = 3 * 1024 * 1024
+SERVER_MEASURE_BUDGET = 6.0
+SERVER_MEASURE_TTL = 300
+# One shared account-wide setting is being toggled to run this, so two
+# overlapping runs would interleave their writes and could strand the account
+# on whichever region lost the race. Serialised, never concurrent.
+server_measure_lock = asyncio.Lock()
+server_measure_last: Dict[str, Any] = {}
+
+
+async def _device_record(session: Dict[str, Any]) -> Dict[str, Any]:
+    info = await kino_get(session, 'v1/device/info', {})
+    device = info.get('device') if isinstance(info, dict) else {}
+    return device if isinstance(device, dict) else {}
+
+
+def _selected_server_id(settings: Any) -> Optional[int]:
+    entry = settings.get('serverLocation') if isinstance(settings, dict) else None
+    for row in (entry or {}).get('value') or []:
+        if isinstance(row, dict) and row.get('selected'):
+            try:
+                return int(row.get('id'))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _server_options(settings: Any) -> List[Dict[str, Any]]:
+    """Region list as the device record itself reports it.
+
+    Preferred over `v1/references/server-location` because this copy already
+    carries which one is selected, so the common read is a single call.
+    """
+    entry = settings.get('serverLocation') if isinstance(settings, dict) else None
+    out: List[Dict[str, Any]] = []
+    for row in (entry or {}).get('value') or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            out.append({'id': int(row.get('id')), 'name': str(row.get('label') or ''),
+                        'selected': bool(row.get('selected'))})
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+@app.get('/servers')
+async def servers(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """Which CDN regions this account can pick from, and the current one."""
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    device = await _device_record(session)
+    settings = device.get('settings') if isinstance(device.get('settings'), dict) else {}
+    options = _server_options(settings)
+    return {
+        'device_id': device.get('id'),
+        'selected': _selected_server_id(settings),
+        'options': options,
+        'last_measured': server_measure_last or None,
+    }
+
+
+@app.post('/servers/select')
+async def servers_select(payload: ServerSelectPayload, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    device = await _device_record(session)
+    settings = device.get('settings') if isinstance(device.get('settings'), dict) else {}
+    options = _server_options(settings)
+    if payload.id not in {row['id'] for row in options}:
+        raise HTTPException(400, f'Unknown server location id: {payload.id}')
+    device_id = device.get('id')
+    if not device_id:
+        raise HTTPException(502, 'KinoPub did not report a device id')
+    if _selected_server_id(settings) != payload.id:
+        await kino_post(session, f'v1/device/{device_id}/settings', {'serverLocation': payload.id})
+        log_event('device', 'CDN server switched', {'device_id': device_id, 'server': payload.id})
+    return {'selected': payload.id, 'options': [
+        {**row, 'selected': row['id'] == payload.id} for row in options]}
+
+
+async def _probe_stream_url(session: Dict[str, Any], item_id: Optional[int]) -> Optional[str]:
+    """A real, currently-valid stream URL to measure against.
+
+    Has to be re-fetched for every region: the CDN host is baked into the
+    signed URL, so reusing one across regions would measure the same box
+    twice. Any playable item does, so the probe rides on whatever
+    `v1/items/popular` returns first rather than pinning an id that may leave
+    the catalogue.
+    """
+    if item_id is None:
+        return None
+    payload = await kino_get(session, f'v1/items/{item_id}', {})
+    item = payload.get('item') if isinstance(payload, dict) else None
+    videos = (item or {}).get('videos') or []
+    files = (videos[0] or {}).get('files') if videos else []
+    best = None
+    for entry in files or []:
+        if not isinstance(entry, dict):
+            continue
+        url = entry.get('url') or {}
+        candidate = url.get('http') or url.get('hls4') or url.get('hls')
+        if not candidate:
+            continue
+        best = best or candidate
+        if entry.get('quality') == '1080p':
+            return candidate
+    return best
+
+
+async def _connect_latency_ms(host: str) -> Optional[float]:
+    """Best of three TCP+TLS handshakes.
+
+    Not ICMP: the container has no raw sockets, and the number that actually
+    matters for playback is how long opening a connection to that CDN edge
+    takes anyway. Reported to the user as "отклик", never as "ping".
+    """
+    best: Optional[float] = None
+    for _ in range(3):
+        started = time.perf_counter()
+        writer = None
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, 443, ssl=ssl.create_default_context(), server_hostname=host),
+                timeout=8)
+            elapsed = (time.perf_counter() - started) * 1000
+            best = elapsed if best is None else min(best, elapsed)
+        except Exception:
+            return best
+        finally:
+            if writer is not None:
+                writer.close()
+                with suppress(Exception):
+                    await writer.wait_closed()
+    return best
+
+
+async def _measure_download(client: httpx.AsyncClient, url: str) -> Dict[str, Any]:
+    received = 0
+    started = time.perf_counter()
+    try:
+        async with client.stream('GET', url, timeout=10,
+                                 headers={'Range': f'bytes=0-{SERVER_MEASURE_BYTES - 1}'}) as response:
+            if response.status_code >= 400:
+                return {'ok': False, 'error': f'HTTP {response.status_code}'}
+            async for chunk in response.aiter_bytes():
+                received += len(chunk)
+                if received >= SERVER_MEASURE_BYTES or time.perf_counter() - started > SERVER_MEASURE_BUDGET:
+                    break
+    except Exception as exc:
+        return {'ok': False, 'error': type(exc).__name__, 'bytes': received}
+    elapsed = max(1e-6, time.perf_counter() - started)
+    return {'ok': received > 0, 'bytes': received, 'seconds': round(elapsed, 3),
+            'mbps': round(received * 8 / elapsed / 1_000_000, 2)}
+
+
+@app.post('/servers/measure')
+async def servers_measure(payload: ServerMeasurePayload, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """Availability + latency + throughput for every CDN region on offer.
+
+    Each region is measured by actually switching to it and pulling the first
+    few MB of a real stream, because that is the only thing that reflects what
+    playback will do - the API host itself is the same for every region and
+    tells you nothing about the CDN edge behind it.
+
+    The switching is the awkward part and is handled honestly rather than
+    hidden: the run is serialised behind a lock, and the previous selection is
+    restored in a `finally` (or replaced by the winner when `apply_best`), so
+    an exception mid-run cannot stand the account up on a region the user
+    never chose. A stream URL already handed to a running player keeps working
+    throughout - it is a full signed URL to a specific host, not a redirect
+    resolved at play time - so this does not interrupt playback in progress.
+    """
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    if server_measure_lock.locked():
+        raise HTTPException(409, 'Проверка серверов уже идёт')
+    async with server_measure_lock:
+        device = await _device_record(session)
+        settings = device.get('settings') if isinstance(device.get('settings'), dict) else {}
+        device_id = device.get('id')
+        options = _server_options(settings)
+        original = _selected_server_id(settings)
+        if not device_id or not options:
+            raise HTTPException(502, 'KinoPub did not report selectable servers')
+        # `type` is mandatory on this endpoint (omitting it is a 400, not an
+        # empty list - found the hard way), and it must be `movie`: a serial's
+        # payload carries `seasons[].episodes[]` instead of the `videos[]`
+        # the probe reads, so a serial would look like "no stream to test".
+        item_id = None
+        probe_error = None
+        try:
+            listing = await kino_get(session, 'v1/items/popular', {'type': 'movie', 'perpage': 5})
+            for entry in extract_catalog_items(listing):
+                if entry.get('id') is not None:
+                    item_id = int(entry['id'])
+                    break
+            if item_id is None:
+                probe_error = 'KinoPub вернул пустой список фильмов'
+        except HTTPException as exc:
+            probe_error = f'HTTP {exc.status_code}'
+        except Exception as exc:
+            probe_error = type(exc).__name__
+        results: List[Dict[str, Any]] = []
+        # Declared here, not in the `finally` that fills them in: the summary
+        # below reads both, and burying their only assignment in a cleanup
+        # block makes that look accidental.
+        best: Optional[int] = None
+        final: Optional[int] = original
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(12, connect=8)) as probe:
+                for option in options:
+                    row: Dict[str, Any] = {'id': option['id'], 'name': option['name']}
+                    try:
+                        await kino_post(session, f'v1/device/{device_id}/settings',
+                                        {'serverLocation': option['id']})
+                        # KinoPub needs a beat before freshly issued URLs come
+                        # back on the new region; without it the first probe
+                        # can still measure the previous one.
+                        await asyncio.sleep(1.0)
+                        url = await _probe_stream_url(session, item_id)
+                        if not url:
+                            row.update({'available': False,
+                                        'error': probe_error or 'Нет потока для проверки'})
+                            results.append(row)
+                            continue
+                        host = httpx.URL(url).host
+                        row['host'] = host
+                        row['latency_ms'] = await _connect_latency_ms(host)
+                        download = await _measure_download(probe, url)
+                        row['mbps'] = download.get('mbps')
+                        row['available'] = bool(download.get('ok')) and row['latency_ms'] is not None
+                        if not download.get('ok'):
+                            row['error'] = download.get('error') or 'Не удалось скачать пробный отрезок'
+                    except HTTPException as exc:
+                        row.update({'available': False, 'error': f'HTTP {exc.status_code}'})
+                    except Exception as exc:
+                        row.update({'available': False, 'error': type(exc).__name__})
+                    results.append(row)
+        finally:
+            # Throughput is the headline number - it is what decides whether a
+            # stream buffers - but a 3 MB sample is genuinely noisy: measured
+            # twice in a row, the same region came back 21.6 then 29.2 Mbps.
+            # So a win only counts as a win with a >15% margin; inside that
+            # band the two are called a tie and the far steadier latency
+            # (best of three handshakes) breaks it. Without this the button
+            # would recommend a different server on every press.
+            usable = [row for row in results if row.get('available') and row.get('mbps')]
+            best = None
+            if usable:
+                ranked = sorted(usable, key=lambda row: row['mbps'], reverse=True)
+                best_row = ranked[0]
+                contenders = [row for row in ranked if row['mbps'] >= best_row['mbps'] * 0.85]
+                with_latency = [row for row in contenders if row.get('latency_ms') is not None]
+                if len(contenders) > 1 and with_latency:
+                    best_row = min(with_latency, key=lambda row: row['latency_ms'])
+                best = best_row['id']
+            final = best if (payload.apply_best and best is not None) else original
+            if final is not None:
+                with suppress(Exception):
+                    await kino_post(session, f'v1/device/{device_id}/settings', {'serverLocation': final})
+        for row in results:
+            row['selected'] = row['id'] == final
+        outcome = {
+            'measured_at': int(time.time()),
+            'selected': final,
+            'previous': original,
+            'applied_best': bool(payload.apply_best and best is not None),
+            'results': results,
+        }
+        server_measure_last.clear()
+        server_measure_last.update(outcome)
+        log_event('device', 'CDN servers measured', outcome)
+        return outcome
 
 
 @app.get('/auth/status')

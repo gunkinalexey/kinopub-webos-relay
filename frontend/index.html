@@ -116,6 +116,15 @@
         <label class="toggle-line"><input id="setAutoplay" type="checkbox" class="focusable"> Автопереход к следующей серии</label>
         <label class="toggle-line"><input id="setMotion" type="checkbox" class="focusable"> Уменьшить анимации</label>
         <label class="toggle-line"><input id="setHistoryFrames" type="checkbox" class="focusable"> Кадр серии вместо обложки в истории</label>
+        <fieldset class="icon-picker-field server-field">
+          <legend>Сервер раздачи</legend>
+          <div class="server-row">
+            <label class="server-pick">Текущий сервер<select id="setServer" class="focusable"><option value="">Загружаем…</option></select></label>
+            <button id="measureServers" type="button" class="focusable secondary">Проверить скорость</button>
+          </div>
+          <div id="serverResults" class="server-results"></div>
+          <span class="subtitle-hint">KinoPub отдаёт видео с одного из своих CDN — выбор применяется сразу, кнопка «Сохранить» для него не нужна. Проверка по очереди переключается на каждый сервер, качает пробный отрезок и возвращает быстрейший (при равной скорости — с меньшим откликом). Замер идёт со стороны сервера-моста, то есть отражает Relay/HLS; при Direct телевизор ходит в CDN сам, своим маршрутом.</span>
+        </fieldset>
         <fieldset class="icon-picker-field">
           <legend>Иконка приложения</legend>
           <div id="appIconPicker" class="app-icon-picker">
