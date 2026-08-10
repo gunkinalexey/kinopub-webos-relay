@@ -10,8 +10,15 @@ var $=function(id){return document.getElementById(id);},video=$('video');
 function wrapAuthCheck(name){var orig=KPApi[name];if(typeof orig!=='function')return;KPApi[name]=function(){var result=orig.apply(KPApi,arguments);if(result&&typeof result.catch==='function')result=result.catch(function(err){if(err&&err.status===401)handleSessionExpired();throw err;});return result;};}
 (function(){var names=Object.keys(KPApi);for(var i=0;i<names.length;i++)wrapAuthCheck(names[i]);})();
 
-var dogBrandIcons=['assets/dog-icon-1.png','assets/dog-icon-2.png','assets/dog-icon-3.png'];
+var dogBrandIcons=['assets/dog/dog-icon-1.png','assets/dog/dog-icon-2.png','assets/dog/dog-icon-3.png'];
 var dogBrandIndex=-1,brandingRotationTimer=null;
+// киноТёрк icons come from whatever image files are dropped in assets/dog/
+// at deploy time - nginx's JSON autoindex on that folder (nginx.conf) lists
+// them for us. Falls back to the bundled three above if the listing fails
+// (older nginx config, offline dev server, etc).
+function loadDogBrandIcons(){fetch('assets/dog/').then(function(r){return r.ok?r.json():null;}).then(function(list){if(!Array.isArray(list))return;var files=list.filter(function(e){return e.type==='file'&&/\.(png|jpe?g|gif|webp)$/i.test(e.name||'');}).map(function(e){return 'assets/dog/'+e.name;}).sort();if(files.length){dogBrandIcons=files;updateDogPreviewStack();}}).catch(function(){});}
+function updateDogPreviewStack(){var stack=document.querySelector('.app-icon-preview-stack');if(!stack)return;var imgs=stack.querySelectorAll('img');for(var i=0;i<imgs.length;i++)imgs[i].src=dogBrandIcons[i%dogBrandIcons.length];}
+loadDogBrandIcons();
 function normalizeAppIcon(value){return value==='kinopub'?'kinopub':'kinoterk';}
 function selectedAppIcon(){var nodes=document.querySelectorAll('input[name="appIcon"]');for(var i=0;i<nodes.length;i++)if(nodes[i].checked)return normalizeAppIcon(nodes[i].value);return 'kinopub';}
 function setFavicon(src,type){var link=$('appFavicon');if(!link){link=document.createElement('link');link.id='appFavicon';link.rel='icon';document.head.appendChild(link);}link.type=type||(/\.svg(?:$|\?)/i.test(src)?'image/svg+xml':'image/png');link.href=src;}

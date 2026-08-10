@@ -51,7 +51,7 @@
 .app-icon-option:has(input:checked){border-color:#19bd76;background:#1c2b2b;color:#fff}
 .app-icon-preview{width:78px;height:78px;border-radius:50%;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#202738}
 .app-icon-preview img{width:100%;height:100%;object-fit:contain}
-.brand-logo-img.dog-brand-logo{filter:none;object-fit:contain;border-radius:50%}
+.brand-logo-img.dog-brand-logo{filter:none;object-fit:contain;border-radius:50%;width:40.8px;height:40.8px}
 body[data-app-brand="kinoterk"] .brand-text{letter-spacing:.1px}
 @media(max-width:900px){.app-icon-picker{grid-template-columns:repeat(2,minmax(120px,1fr))}}
 
