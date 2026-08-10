@@ -1,5 +1,5 @@
 (function(){'use strict';
-var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:Date.now(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,watchingView:'new',watchingItems:null,watchingAllItems:null,similarToken:0,serverFfmpeg:null,bookmarkFolders:null,bookmarkFolder:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
+var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:Date.now(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,watchingView:'new',watchingItems:null,watchingAllItems:null,similarToken:0,serverFfmpeg:null,bookmarkFolders:null,bookmarkFolder:null,collectionSort:'new',collectionId:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
 var $=function(id){return document.getElementById(id);},video=$('video');
 // Every backend call that needs a session (catalog, history, profile, item
 // details...) raises a real HTTP 401 the moment the cookie is gone or
@@ -36,6 +36,7 @@ var routes={
  tvshow:{title:'ТВ Шоу',mode:'category',section:'tvshow',feed:'all'},
  sport:{title:'Спорт',mode:'tv'},
  bookmarks:{title:'Закладки',mode:'bookmarks'},
+ collections:{title:'Подборки',mode:'collections'},
  settings:{title:'Настройки',mode:'settings'}
 };
 function esc(v){var d=document.createElement('div');d.textContent=String(v==null?'':v);return d.innerHTML;}
@@ -486,6 +487,7 @@ function catalogFilterSignature(cfg){var f=currentFilters(cfg),parts=[];['genre'
 function catalogPageKey(cfg){
  if(cfg.mode==='history')return 'history:'+(state.historyType||'all');
  if(cfg.mode==='bookmarks')return 'bookmarks:'+(state.bookmarkFolder||'list');
+ if(cfg.mode==='collections')return state.collectionId?'collections:view:'+state.collectionId:'collections:list:'+state.collectionSort;
  return filterStorageKey(cfg)+catalogFilterSignature(cfg);
 }
 function currentCatalogPage(cfg){var key=catalogPageKey(cfg);return state.catalogPages[key]||0;}
@@ -530,7 +532,16 @@ function discoverTotalPages(cfg,meta,itemCount,forceRefresh){
    renderPagination(meta,itemCount);
  }).catch(function(err){KPApi.report('Page count discovery failed',{section:cfg.section,feed:cfg.feed,error:String(err)},'catalog').catch(function(){});});
 }
-var HISTORY_TABS=[['','Все'],['movie','Фильмы'],['serial','Сериалы'],['3d','3D'],['concert','Концерты'],['documovie','Докуфильмы'],['docuserial','Докусериалы'],['tvshow','ТВ Шоу']];
+// "Все фильмы"/"Все эпизоды" are two aggregate tabs on top of the per-type
+// ones, matching kino.watch's own history page (which has both, not one
+// instead of the other). `v1/history` has no `type` concept at all - not per
+// type and not per aggregate - so both are this bridge grouping the same
+// real `type` field: "фильмы" is everything that is one watch, one entry
+// (movie/3d/concert/documovie); "эпизоды" is everything with real
+// seasons/episodes (serial/docuserial/tvshow) - the same split the details
+// screen's duration display already uses. Backend's HISTORY_GROUPS mirrors
+// these two sets exactly.
+var HISTORY_TABS=[['','Все'],['movies','Все фильмы'],['episodes','Все эпизоды'],['movie','Фильмы'],['serial','Сериалы'],['3d','3D'],['concert','Концерты'],['documovie','Докуфильмы'],['docuserial','Докусериалы'],['tvshow','ТВ Шоу']];
 function setHistoryType(type){state.historyType=type||'';renderCatalog();}
 function renderHistoryTabs(root){var row=document.createElement('div');row.className='tab-row history-tabs';for(var i=0;i<HISTORY_TABS.length;i++){var b=document.createElement('button');b.className='focusable catalog-tab'+((state.historyType||'')===HISTORY_TABS[i][0]?' active':'');b.textContent=HISTORY_TABS[i][1];b.onclick=(function(t){return function(){setHistoryType(t);};}(HISTORY_TABS[i][0]));row.appendChild(b);}root.appendChild(row);}
 // KinoPub returns history newest first; the site groups it under day headings.
@@ -668,7 +679,14 @@ function renderTv(cfg){
 function bookmarkFolderCard(folder){
  var b=document.createElement('button');b.className='media-card bookmark-folder-card focusable';
  b.innerHTML='<div class="poster-art bookmark-folder-art"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M10 6h28a2 2 0 0 1 2 2v34l-16-9-16 9V8a2 2 0 0 1 2-2z"/></svg></div><div class="item-title">'+esc(folder.title||'')+'</div><div class="item-author">'+esc(plural(folder.count||0,'тайтл','тайтла','тайтлов'))+'</div>';
- b.onclick=function(){state.bookmarkFolder=folder.id;renderCatalog();};
+ // Pushes its own hash entry (not routed through route(), which would also
+ // reset the sidebar-active-class/focus bookkeeping unnecessarily for a
+ // move that stays inside "Закладки") so the browser back stack has "list ->
+ // folder -> item", not "list -> item" - otherwise history.back() from an
+ // item's details (used by both the details "← Назад" button and the
+ // remote's hardware Back key) skipped the folder entirely and dropped
+ // straight to the folder list. Reproduced live before this fix.
+ b.onclick=function(){state.bookmarkFolder=folder.id;renderCatalog();pushHash(encodeRouteHash('bookmarks')+'/'+encodeURIComponent(folder.id));};
  return b;
 }
 function renderBookmarkFolderList(){
@@ -697,7 +715,7 @@ function renderBookmarkFolderItems(folderId){
  var head=document.createElement('div');head.className='catalog-title-row';
  head.innerHTML='<h3><button id="bookmarksBack" class="focusable title-link" type="button">← Закладки</button>&nbsp;&nbsp;'+esc(known?known.title:'')+'</h3>';
  root.appendChild(head);
- var back=head.querySelector('#bookmarksBack');if(back)back.onclick=function(){state.bookmarkFolder=null;renderCatalog();};
+ var back=head.querySelector('#bookmarksBack');if(back)back.onclick=function(){state.bookmarkFolder=null;renderCatalog();pushHash(encodeRouteHash('bookmarks'));};
  // Reads/writes through the normal catalogPageKey()/setCatalogPage() path
  // (keyed to 'bookmarks:<folderId>' there) rather than a hand-rolled one, so
  // the existing pagination buttons (which call setCatalogPage -> renderCatalog)
@@ -719,12 +737,107 @@ function renderBookmarkFolderItems(folderId){
  });
 }
 function renderBookmarks(cfg){if(state.bookmarkFolder)renderBookmarkFolderItems(state.bookmarkFolder);else renderBookmarkFolderList();}
+// "Подборки" - real curated collections (`v1/collections`, kinoapi.com/
+// api_collections.html - documented on its own page, separate from the
+// general video-API reference, which is why an earlier session's search
+// missed it and only flagged the sidebar button as "confirmed-real, unused").
+// Three tabs, matching what's actually a *sort*, not everything kino.watch's
+// own page offers: verified live that "Новые"/"Популярные"/"Просматриваемые"
+// (`sort=updated-`/`watchers-`/`views-`) each return a genuinely different
+// first page, matching the site's own ordering item-for-item on this account
+// (id 33 "MARVEL" first under "Популярные", same watcher count the site
+// shows). "Категории" groups by genre - a different shape of listing, not a
+// sort - and "Подписки" ("collections I follow") has no documented
+// subscribe/list-subscriptions endpoint, unlike the item watchlist's
+// `togglewatchlist`; neither is offered rather than faked.
+var COLLECTION_TABS=[['new','Новые'],['top','Популярные'],['views','Просматриваемые']];
+function collectionCard(collection){
+ var b=document.createElement('button');b.className='media-card focusable';
+ b.innerHTML='<div class="poster-art"></div><div class="item-title">'+esc(collection.title||'')+'</div><div class="item-author">Смотрят '+esc(Number(collection.watchers||0).toLocaleString('ru-RU'))+'</div>';
+ var poster=b.querySelector('.poster-art');if(poster)poster.style.background=bgCss(collection.poster,'poster');
+ // Same fix as the bookmark folder card above, same shared cause: without
+ // its own hash entry, history.back() from an item opened inside this
+ // collection (the details screen's own "← Назад", and the remote's
+ // hardware Back key) landed on the collections list, skipping the
+ // collection itself - reproduced live before this fix.
+ b.onclick=function(){state.collectionId=collection.id;renderCatalog();pushHash(encodeRouteHash('collections')+'/'+encodeURIComponent(collection.id));};
+ return b;
+}
+function renderCollectionTabs(root){
+ var row=document.createElement('div');row.className='tab-row';
+ for(var i=0;i<COLLECTION_TABS.length;i++){
+  var b=document.createElement('button');b.className='focusable catalog-tab'+(state.collectionSort===COLLECTION_TABS[i][0]?' active':'');
+  b.textContent=COLLECTION_TABS[i][1];
+  b.onclick=(function(sort){return function(){state.collectionSort=sort;renderCatalog();};}(COLLECTION_TABS[i][0]));
+  row.appendChild(b);
+ }
+ root.appendChild(row);
+}
+function renderCollectionList(cfg){
+ var root=$('catalogTop');root.innerHTML='';
+ var head=document.createElement('div');head.className='catalog-title-row';head.innerHTML='<h3>Подборки</h3>';
+ root.appendChild(head);renderCollectionTabs(root);
+ var page=currentCatalogPage(cfg),g=$('catalogGrid');
+ g.className='poster-grid';g.innerHTML='<p class="empty-state">Загружаем подборки…</p>';
+ $('catalogPagination').classList.add('hidden');
+ var requestId=++state.catalogRequest;
+ KPApi.collections(state.collectionSort,page).then(function(data){
+  if(requestId!==state.catalogRequest)return;
+  var items=(data&&data.items)||[];
+  g.innerHTML='';
+  for(var i=0;i<items.length;i++)g.appendChild(collectionCard(items[i]));
+  if(!items.length)g.innerHTML='<p class="empty-state">Подборок не нашлось</p>';
+  var meta={page:data&&data.page||0,total_pages:data&&data.total_pages||0,total_items:data&&data.total_items||0,has_next:!!(data&&data.has_next),perpage:(data&&data.perpage)||24};
+  renderPagination(meta,items.length);
+ }).catch(function(err){
+  if(requestId!==state.catalogRequest)return;
+  g.innerHTML='<p class="empty-state">Не удалось загрузить подборки: '+esc(err&&err.message?err.message:String(err))+'</p>';
+  $('catalogPagination').classList.add('hidden');
+  KPApi.report('Collections list failed',{sort:state.collectionSort,error:String(err)},'catalog').catch(function(){});
+ });
+}
+function collectionStatLine(collection){
+ return 'Смотрят '+esc(Number(collection.watchers||0).toLocaleString('ru-RU'))+' · Просмотров '+esc(Number(collection.views||0).toLocaleString('ru-RU'));
+}
+function renderCollectionHead(collection){
+ var root=$('catalogTop');root.innerHTML='';
+ var head=document.createElement('div');head.className='catalog-title-row';
+ var title=collection?esc(collection.title||''):'';
+ head.innerHTML='<h3><button id="collectionsBack" class="focusable title-link" type="button">← Подборки</button>'+(title?'&nbsp;&nbsp;'+title:'')+'</h3>';
+ root.appendChild(head);
+ head.querySelector('#collectionsBack').onclick=function(){state.collectionId=null;renderCatalog();pushHash(encodeRouteHash('collections'));};
+ if(collection){var stats=document.createElement('div');stats.className='collection-stats';stats.innerHTML=collectionStatLine(collection);root.appendChild(stats);}
+}
+// No pagination here on purpose: `v1/collections/view` has none to offer -
+// verified live, a 67-item collection ("MARVEL") came back as one response
+// with no `pagination` key at all, matching kino.watch's own page for it
+// (also all 67 in one load, no page-2 link). Showing everything at once is
+// not a shortcut, it is the only thing that matches what upstream actually
+// does.
+function renderCollectionItems(collectionId){
+ renderCollectionHead(null);
+ var g=$('catalogGrid');g.className='poster-grid';$('catalogPagination').classList.add('hidden');
+ g.innerHTML='<p class="empty-state">Загружаем подборку…</p>';
+ var requestId=++state.catalogRequest;
+ KPApi.collection(collectionId).then(function(data){
+  if(requestId!==state.catalogRequest)return;
+  var collection=(data&&data.collection)||{},items=(data&&data.items)||[];
+  renderCollectionHead(collection);
+  renderCatalogItems(items);
+ }).catch(function(err){
+  if(requestId!==state.catalogRequest)return;
+  g.innerHTML='<p class="empty-state">Не удалось загрузить подборку: '+esc(err&&err.message?err.message:String(err))+'</p>';
+  KPApi.report('Collection view failed',{id:collectionId,error:String(err)},'catalog').catch(function(){});
+ });
+}
+function renderCollections(cfg){if(state.collectionId)renderCollectionItems(state.collectionId);else renderCollectionList(cfg);}
 function renderCatalog(){
  var cfg=routes[state.route]||routes.popular;
  if(cfg.mode==='history'){renderHistory(cfg);return;}
  if(cfg.mode==='watching'){renderWatching(cfg);return;}
  if(cfg.mode==='tv'){renderTv(cfg);return;}
  if(cfg.mode==='bookmarks'){renderBookmarks(cfg);return;}
+ if(cfg.mode==='collections'){renderCollections(cfg);return;}
  renderTop();
  var g=$('catalogGrid'),page=currentCatalogPage(cfg);
  g.className='poster-grid';
@@ -760,7 +873,7 @@ function renderCatalog(){
 }
 function renderCatalogItems(items){var g=$('catalogGrid');g.innerHTML='';for(var i=0;i<items.length;i++)g.appendChild(card(items[i]));if(!items.length)g.innerHTML='<p class="empty-state">В этом разделе '+esc(appBrandName())+' пока не вернул контент</p>';}
 
-function resetNavigationState(name){state.bookmarkFolder=null;var cfg=routes[name];if(cfg){state.catalogPages[catalogPageKey(cfg)]=0;}var input=$('searchInput');if(input)input.value='';state.currentSuggestions=[];state.suggestionIndex=-1;if(state.searchTimer){clearTimeout(state.searchTimer);state.searchTimer=null;}state.searchSeq++;hideSuggestions();}
+function resetNavigationState(name){state.bookmarkFolder=null;state.collectionId=null;var cfg=routes[name];if(cfg){state.catalogPages[catalogPageKey(cfg)]=0;}var input=$('searchInput');if(input)input.value='';state.currentSuggestions=[];state.suggestionIndex=-1;if(state.searchTimer){clearTimeout(state.searchTimer);state.searchTimer=null;}state.searchSeq++;hideSuggestions();}
 // Screens are mutually exclusive panes inside the content shell. The details
 // view is one of them now, so opening a card replaces the grid instead of
 // covering it, and Back returns to whichever screen you came from.
@@ -788,7 +901,7 @@ function applyHash(){
   var h=parseHash(),leavingDetails=!$('detailsScreen').classList.contains('hidden')&&h.type!=='details';
   if(h.type==='details'&&h.a)openDetails({id:h.a,title:''});
   else if(h.type==='search')doSearch(h.a||'all',h.b);
-  else if(h.type==='route'&&h.a)route(h.a);
+  else if(h.type==='route'&&h.a)route(h.a,h.b||undefined);
   else route('popular');
   // Same focus-restore closeDetails() does, since the branches above already
   // handled showing the right screen (route()/doSearch() both call
@@ -798,7 +911,11 @@ function applyHash(){
   applyingHistoryState=false;
  }
 }
-function route(name){var before=document.activeElement;if(name==='settings'){state.route=name;showScreen('settingsScreen');loadSettings();}else{resetNavigationState(name);state.route=name;showScreen('catalogScreen');renderCatalog();}var links=document.querySelectorAll('[data-route]');for(var i=0;i<links.length;i++)links[i].classList.toggle('active',links[i].getAttribute('data-route')===name || (name==='new'&&links[i].getAttribute('data-route')==='popular'));setTimeout(function(){var target=routeFocusTarget(name,before);if(target)try{target.focus();}catch(e){}},20);pushHash(encodeRouteHash(name));}
+// `subId` restores a sub-view within a route (which bookmark folder, which
+// collection) - only meaningful for name 'bookmarks'/'collections'. Exists so
+// applyHash() can land a reload/back/forward exactly back inside a folder or
+// collection instead of always at that section's top-level list.
+function route(name,subId){var before=document.activeElement;if(name==='settings'){state.route=name;showScreen('settingsScreen');loadSettings();}else{resetNavigationState(name);state.route=name;if(subId){if(name==='bookmarks')state.bookmarkFolder=subId;else if(name==='collections')state.collectionId=subId;}showScreen('catalogScreen');renderCatalog();}var links=document.querySelectorAll('[data-route]');for(var i=0;i<links.length;i++)links[i].classList.toggle('active',links[i].getAttribute('data-route')===name || (name==='new'&&links[i].getAttribute('data-route')==='popular'));setTimeout(function(){var target=routeFocusTarget(name,before);if(target)try{target.focus();}catch(e){}},20);pushHash(subId?encodeRouteHash(name)+'/'+encodeURIComponent(subId):encodeRouteHash(name));}
 function detailsMediaList(item){if(item.seasons&&item.seasons.length){var all=[];for(var s=0;s<item.seasons.length;s++)all=all.concat(item.seasons[s].episodes||[]);return all;}return item.media||[];}
 function detailsTrackList(item,field){var media=detailsMediaList(item),seen={},out=[];for(var i=0;i<media.length;i++){var list=media[i][field]||[];for(var j=0;j<list.length;j++){var label=field==='audios'?detailedAudioLabel(list[j],out.length,false):detailedSubtitleLabel(list[j],out.length,false);var body=label.replace(/^\d+\.\s*/,'');if(body&&!seen[body]){seen[body]=true;out.push(body);}}}return out;}
 // Movie vs series duration is not a UI choice, it is forced by what KinoPub's

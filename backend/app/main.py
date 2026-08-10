@@ -151,7 +151,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.94', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.96', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -1162,6 +1162,19 @@ async def catalog_page_count(section: str = 'movie', feed: str = 'fresh', perpag
 
 
 HISTORY_TYPES = ['movie', 'serial', '3d', 'concert', 'documovie', 'docuserial', 'tvshow']
+# Two aggregate tabs on top of the per-type ones - kino.watch's own history
+# page has both "Все фильмы"/"Все эпизоды" (aggregates) and the individual
+# type tabs side by side, not one or the other. `v1/history` has no concept
+# of these itself (no `type` param at all, aggregate or otherwise - see the
+# note below); they are purely this bridge grouping the same real `type`
+# field into "standalone" vs "episodic" content, using the exact same split
+# the details screen's duration display already relies on (`serial`/
+# `docuserial`/`tvshow` are the types with real seasons/episodes; everything
+# else - `movie`/`3d`/`concert`/`documovie` - is one watch, one entry).
+HISTORY_GROUPS = {
+    'movies': {'movie', '3d', 'concert', 'documovie'},
+    'episodes': {'serial', 'docuserial', 'tvshow'},
+}
 # v1/history ignores a `type` parameter: it returns the same page whatever is
 # passed. Filtering therefore has to happen here, which means one upstream page
 # no longer fills one UI page, so several are scanned and sliced locally.
@@ -1209,7 +1222,9 @@ async def _history_fetch(session: Dict[str, Any], api_page: int, perpage: int) -
 
 
 async def _history_scan(session: Dict[str, Any], sid: str, section: str) -> List[Dict[str, Any]]:
-    """Every history item of one type, walking upstream pages until exhausted."""
+    """Every history item of one type (or one of the two aggregate groups
+    above), walking upstream pages until exhausted."""
+    types = HISTORY_GROUPS.get(section) or {section}
     key = f'{hashlib.sha256(sid.encode("utf-8")).hexdigest()[:16]}:{section}'
     cached = history_cache.get(key)
     if cached and cached['at'] + HISTORY_CACHE_TTL > time.time():
@@ -1222,7 +1237,7 @@ async def _history_scan(session: Dict[str, Any], sid: str, section: str) -> List
         scanned += len(entries)
         for entry in entries:
             item = _history_entry_item(entry)
-            if item and str(item.get('type') or '') == section:
+            if item and str(item.get('type') or '') in types:
                 collected.append(item)
         if len(entries) < HISTORY_SCAN_PERPAGE:
             break
@@ -1241,7 +1256,7 @@ async def catalog_history(page: int = 0, perpage: int = 48, type: str = '', kp_s
     Distinct from ``/history``, which is this bridge's own resume positions.
     """
     section = (type or '').strip().lower()
-    if section and section not in HISTORY_TYPES:
+    if section and section not in HISTORY_TYPES and section not in HISTORY_GROUPS:
         raise HTTPException(400, f'Unknown history type: {section}')
     page = max(0, min(page, 9999))
     perpage = max(1, min(perpage, 100))
@@ -1565,6 +1580,83 @@ async def catalog_bookmark_folder(folder_id: str, page: int = 0, perpage: int = 
         'has_next': (page + 1 < totals['total_pages']) if totals['total_pages'] > 1 else (len(items) >= perpage),
         'items': items,
     }
+
+
+COLLECTION_SORTS = {'new': 'updated-', 'top': 'watchers-', 'views': 'views-'}
+
+
+def _normalize_collection(raw: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        'id': str(raw.get('id', '')).strip(),
+        'title': str(raw.get('title') or ''),
+        'watchers': int(_plain_number(raw.get('watchers')) or 0),
+        'views': int(_plain_number(raw.get('views')) or 0),
+        'updated': raw.get('updated'),
+        'poster': _image_url(raw.get('posters'), 'big'),
+    }
+
+
+@app.get('/catalog/collections')
+async def catalog_collections(
+    sort: str = 'new', page: int = 0, perpage: int = 24,
+    kp_session: Optional[str] = Cookie(default=None),
+) -> Dict[str, Any]:
+    """Curated "Подборки" (`v1/collections`, kinoapi.com/api_collections.html
+    - documented on its own page, separate from the general video-API
+    reference, which is why an earlier session missed it and flagged the
+    sidebar button as merely "confirmed-real, unused").
+
+    `sort` here is one of three named tabs, not a raw passthrough:
+    kino.watch's own page has five (Новые/Популярные/Просматриваемые/
+    Категории/Подписки), and only the first three map onto a real
+    `v1/collections` sort value - `Категории` groups by genre (a different
+    shape of listing, not a sort) and `Подписки` is "collections *this
+    account* follows" (no subscribe/list-subscriptions endpoint is
+    documented, unlike the item watchlist's `togglewatchlist`). Verified
+    live that the three that do exist are not decorative: `sort=updated-`
+    (default), `watchers-`, and `views-` each return a genuinely different
+    first page, matching kino.watch's own "Новые"/"Популярные"/
+    "Просматриваемые" tabs item-for-item on this account (id 33 "MARVEL"
+    first under `watchers-` with `watchers=2131`, exactly what the site's
+    own "Популярные" tab shows).
+    """
+    upstream_sort = COLLECTION_SORTS.get(sort, COLLECTION_SORTS['new'])
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    perpage = max(1, min(perpage, 100))
+    api_page = max(0, page) + 1
+    payload = await kino_get(session, 'v1/collections', {'sort': upstream_sort, 'page': api_page, 'perpage': perpage})
+    raw_items = payload.get('items') if isinstance(payload, dict) else None
+    collections = [_normalize_collection(r) for r in (raw_items or []) if isinstance(r, dict) and r.get('id') is not None]
+    totals = _pagination_values(payload, perpage)
+    return {
+        'items': collections, 'page': page, 'perpage': perpage,
+        'total_items': totals['total_items'], 'total_pages': totals['total_pages'],
+        'has_next': (page + 1 < totals['total_pages']) if totals['total_pages'] > 1 else (len(collections) >= perpage),
+    }
+
+
+@app.get('/catalog/collections/{collection_id}')
+async def catalog_collection_view(collection_id: str, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """One collection's contents (`v1/collections/view?id=`) - same item
+    shape as the regular catalogue (verified live: same fields as a
+    `v1/items` entry, movies and serials mixed freely, e.g. "MARVEL" opens
+    with two serials before its first movie), so the existing card/details
+    flow needs no changes to show them.
+
+    No `page`/`perpage` here because upstream has none for this endpoint -
+    `v1/collections/view` returns every item in one response (confirmed live:
+    67 items for "MARVEL" in a single reply, no `pagination` key at all,
+    matching the "Фильмов 67" count kino.watch's own page shows). The
+    frontend paginates this list client-side rather than pretend the API
+    offers server paging it does not.
+    """
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    payload = await kino_get(session, 'v1/collections/view', {'id': collection_id})
+    raw_collection = payload.get('collection') if isinstance(payload, dict) else {}
+    raw_items = payload.get('items') if isinstance(payload, dict) else None
+    items = [normalize_catalog_item(r) for r in (raw_items or []) if isinstance(r, dict)]
+    collection = _normalize_collection(raw_collection if isinstance(raw_collection, dict) else {'id': collection_id})
+    return {'collection': collection, 'items': items, 'total_items': len(items)}
 
 
 @app.get('/catalog/autocomplete')

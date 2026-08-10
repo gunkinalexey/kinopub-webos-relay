@@ -24,6 +24,21 @@ const HISTORY = {
   ],
   movie: [{ id:'1', type:'movie', title:'Только фильм', watched_at: now - 60 }],
   '3d':  [{ id:'4', type:'3d',    title:'Только 3D',    watched_at: now - 3 * DAY }],
+  // The two aggregate tabs: "movies" groups movie/3d/concert/documovie
+  // (everything that is one watch, one entry), "episodes" groups
+  // serial/docuserial/tvshow (everything with real seasons/episodes) - same
+  // split the backend's HISTORY_GROUPS uses. Distinct fixture data from the
+  // '' (unfiltered) and single-type entries above, so a test that reads one
+  // when it should read another fails loudly instead of accidentally
+  // matching.
+  movies: [
+    { id:'1', type:'movie', title:'Сегодняшний фильм', watched_at: now - 60 },
+    { id:'3', type:'movie', title:'Вчерашний',         watched_at: now - DAY - 60 },
+    { id:'4', type:'3d',    title:'Позавчера',         watched_at: now - 3 * DAY },
+  ],
+  episodes: [
+    { id:'2', type:'serial', title:'Ещё сегодня', watched_at: now - 7200 },
+  ],
 };
 
 const GENRES = [{id:1,title:'Комедия'},{id:9,title:'Драма'}];
@@ -32,6 +47,18 @@ const FOLDERS = [{id:'f1',title:'йоу',count:5,views:3}];
 const FOLDER_ITEMS = [
   {id:'m1',type:'movie',title:'Как стать миллионером'},
   {id:'m2',type:'movie',title:'Притворись моей женой'},
+];
+// Two sort tabs, genuinely different orderings - proves the app is not just
+// relabeling the same list under a second tab.
+const COLLECTIONS = {
+  new:  [{id:'c1',title:'Титаник и всё о нём',watchers:3,views:161,poster:''},
+         {id:'c2',title:'MARVEL',watchers:2131,views:163700,poster:''}],
+  top:  [{id:'c2',title:'MARVEL',watchers:2131,views:163700,poster:''},
+         {id:'c1',title:'Титаник и всё о нём',watchers:3,views:161,poster:''}],
+};
+const COLLECTION_ITEMS = [
+  {id:'i1',type:'serial',title:'Непобедимый Халк'},
+  {id:'i2',type:'movie',title:'Люди Икс 2'},
 ];
 
 let lastCatalogFilters = null;
@@ -64,6 +91,10 @@ global.KPApi = {
   bookmarkFolders:()=>Promise.resolve({folders:FOLDERS}),
   bookmarkFolder:(id,page)=>{ calls.push(['bookmarkFolder',id,page]);
     return Promise.resolve({folder:{id,title:'йоу'},items:FOLDER_ITEMS,page:page||0,total_pages:1,total_items:5,has_next:false,perpage:48}); },
+  collections:(sort,page)=>{ calls.push(['collections',sort,page]);
+    return Promise.resolve({items:COLLECTIONS[sort]||COLLECTIONS.new,page:page||0,total_pages:1,total_items:2,has_next:false,perpage:24}); },
+  collection:(id)=>{ calls.push(['collection',id]);
+    return Promise.resolve({collection:{id,title:'MARVEL',watchers:2131,views:163700},items:COLLECTION_ITEMS,total_items:2}); },
   imageProxyUrl:u=>u, streamProxyUrl:u=>u, hlsProxyUrl:u=>u, subtitleProxyUrl:u=>u,
 };
 window.KPApi = global.KPApi;
@@ -131,7 +162,7 @@ const bubbles = name => {
   check('requests page 0, all types', calls[0], ['history',0,'']);
   check('heading', document.querySelector('#catalogTop h3').textContent, 'История просмотров');
   check('type tabs', qa('.history-tabs .catalog-tab').map(b => b.textContent),
-    ['Все','Фильмы','Сериалы','3D','Концерты','Докуфильмы','Докусериалы','ТВ Шоу']);
+    ['Все','Все фильмы','Все эпизоды','Фильмы','Сериалы','3D','Концерты','Докуфильмы','Докусериалы','ТВ Шоу']);
   check('grid switches to the day-grouped list',
     document.getElementById('catalogGrid').className, 'history-list');
   check('one heading per distinct day', qa('.history-day').map(h => h.textContent),
@@ -140,12 +171,22 @@ const bubbles = name => {
     qa('.history-day')[0].nextElementSibling.querySelectorAll('.media-card').length, 2);
   check('cards render for every entry', qa('.media-card').length, 4);
 
-  console.log('--- type filter ---');
+  console.log('--- "Все фильмы"/"Все эпизоды": aggregate tabs, not per-type ones ---');
   calls.length = 0; click(qa('.history-tabs .catalog-tab')[1]); await settle();
+  check('"Все фильмы" asks upstream for the movies group, not a single type',
+    calls[0], ['history',0,'movies']);
+  check('groups movie/3d together, matching backend\'s HISTORY_GROUPS',
+    qa('.media-card').length, 3);
+  calls.length = 0; click(qa('.history-tabs .catalog-tab')[2]); await settle();
+  check('"Все эпизоды" asks upstream for the episodes group', calls[0], ['history',0,'episodes']);
+  check('only the serial entry matches', qa('.media-card').length, 1);
+
+  console.log('--- type filter ---');
+  calls.length = 0; click(qa('.history-tabs .catalog-tab')[3]); await settle();
   check('Фильмы tab asks upstream for movie', calls[0], ['history',0,'movie']);
   check('active tab moved', document.querySelector('.history-tabs .catalog-tab.active').textContent, 'Фильмы');
   check('list replaced, not appended', qa('.media-card').length, 1);
-  calls.length = 0; click(qa('.history-tabs .catalog-tab')[3]); await settle();
+  calls.length = 0; click(qa('.history-tabs .catalog-tab')[5]); await settle();
   check('3D tab asks upstream for 3d', calls[0], ['history',0,'3d']);
 
   console.log('--- paging is tracked per type ---');
@@ -367,6 +408,63 @@ const bubbles = name => {
   app.route('movie'); await settle();
   app.route('bookmarks'); await settle();
   check('does not reopen the last folder', qa('.bookmark-folder-card').length, 1);
+
+  // Reported from the TV: opening a title from inside a bookmark folder, then
+  // pressing Back (the details screen's own button, and the remote's
+  // hardware Back key both go through history.back()), dropped straight to
+  // the folder LIST instead of the folder - because opening a folder never
+  // pushed its own hash entry, so the browser's back stack skipped it
+  // entirely. route(name, subId) is the fix: it is what applyHash() now
+  // calls on the way back, and this exercises exactly that path without
+  // needing a real browser history stack in jsdom.
+  console.log('--- a folder survives a route(name, subId) restore, the same call history.back() drives ---');
+  app.route('movie'); await settle();
+  app.route('bookmarks', 'f1'); await settle();
+  check('lands directly inside the folder, not its list',
+    qa('.media-card .item-title').map(e => e.textContent),
+    ['Как стать миллионером','Притворись моей женой']);
+
+  console.log('--- "Подборки": real collections (v1/collections), not a dead sidebar link ---');
+  check('sidebar link is wired', !!document.querySelector('[data-route="collections"]'), true);
+  calls.length = 0;
+  app.route('collections'); await settle();
+  check('heading', document.querySelector('#catalogTop h3').textContent, 'Подборки');
+  check('asked for the default "Новые" sort', calls[0], ['collections', 'new', 0]);
+  check('three real sort tabs, matching kino.watch\'s own Новые/Популярные/Просматриваемые',
+    qa('.catalog-tab').map(t => t.textContent), ['Новые','Популярные','Просматриваемые']);
+  check('Новые is active by default', qa('.catalog-tab')[0].classList.contains('active'), true);
+  check('one card per collection, real poster + watcher count',
+    qa('.media-card .item-title').map(e => e.textContent), ['Титаник и всё о нём','MARVEL']);
+  check('watcher count shown, not a made-up film count the list endpoint does not have',
+    qa('.media-card .item-author')[1].textContent, 'Смотрят 2 131');
+
+  calls.length = 0;
+  click(qa('.catalog-tab')[1]); await settle();
+  check('switching to Популярные re-fetches with that sort', calls[0], ['collections', 'top', 0]);
+  check('and the ordering genuinely changes, not just the label',
+    qa('.media-card .item-title').map(e => e.textContent), ['MARVEL','Титаник и всё о нём']);
+
+  calls.length = 0;
+  click(qa('.media-card')[0]); await settle();
+  check('opening a collection fetches its contents', calls[0], ['collection', 'c2']);
+  check('renders the collection\'s real items, same card as everywhere else',
+    qa('.media-card .item-title').map(e => e.textContent), ['Непобедимый Халк','Люди Икс 2']);
+  check('header names the open collection and offers a way back',
+    document.querySelector('#catalogTop h3').textContent.indexOf('MARVEL') >= 0, true);
+  check('stats line shows the real watchers/views KinoPub returned',
+    document.querySelector('.collection-stats').textContent, 'Смотрят 2 131 · Просмотров 163 700');
+  check('no pagination bar - v1/collections/view has none to offer, not this app pretending otherwise',
+    document.getElementById('catalogPagination').classList.contains('hidden'), true);
+
+  click(document.getElementById('collectionsBack')); await settle();
+  check('back returns to the collection list, sort tab preserved',
+    [qa('.media-card').length, qa('.catalog-tab.active')[0].textContent], [2, 'Популярные']);
+
+  console.log('--- a collection survives a route(name, subId) restore too ---');
+  app.route('movie'); await settle();
+  app.route('collections', 'c2'); await settle();
+  check('lands directly inside the collection, not its list',
+    qa('.media-card .item-title').map(e => e.textContent), ['Непобедимый Халк','Люди Икс 2']);
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nAll checks passed');
   process.exit(failures ? 1 : 0);

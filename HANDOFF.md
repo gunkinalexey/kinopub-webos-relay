@@ -69,7 +69,7 @@ read-only — **frontend changes are live immediately, no rebuild**.
 
 Backend version string lives at `app = FastAPI(..., version='0.9.NN', ...)`
 in `main.py` near the top; bump it whenever `backend/` changes so `/health`
-reflects what's actually deployed. **Currently: backend 0.9.94.**
+reflects what's actually deployed. **Currently: backend 0.9.96.**
 
 The real upstream API is `https://api.service-kp.com` (`API_BASE`). Docs at
 kinoapi.com are patchy and the domain is **intermittently unreachable via
@@ -86,13 +86,13 @@ inside the backend container instead (see "Verifying live" below).
 ## Current state
 
 - Branch: `rework/audio-subtitles-details` (not merged to `main`)
-- Backend running version: **0.9.94**, containers up via `docker compose up -d`
+- Backend running version: **0.9.96**, containers up via `docker compose up -d`
 - `curl http://localhost:8080/bridge/health` to check it's alive
 - Working tree has uncommitted changes at handoff time — the auto-commit
   hook (see below) picks them up at the end of the current turn if this
   handoff is being read mid-session; if you're starting fresh, they're
   probably already committed.
-- **283 frontend checks + 29 backend smoke checks, all green** (see Testing
+- **304 frontend checks + 31 backend smoke checks, all green** (see Testing
   below)
 
 ## How work has been happening (read this before doing anything)
@@ -166,8 +166,31 @@ an honest smaller filter panel than a bigger one with dead switches.
 
 ## Everything fixed/built, most recent first (README.md has full prose, this is the map)
 
-Backend 0.9.79 → 0.9.94 this stretch, frontend tests 159 → 283:
+Backend 0.9.79 → 0.9.96 this stretch, frontend tests 159 → 304:
 
+24. **История: "Все фильмы"/"Все эпизоды"** aggregate tabs, added alongside
+    the existing per-type ones (kino.watch's own history page has both, not
+    one instead of the other). `HISTORY_GROUPS` on the backend groups the
+    same real `type` field client-side-of-upstream (`v1/history` has no
+    `type` param at all) into the same standalone-vs-episodic split item #22
+    already established for the duration display. Verified live: 148/852
+    real entries on this account, cached like every other type filter.
+23. **"Подборки" wired for real** (`v1/collections`, `v1/collections/view` -
+    documented on `kinoapi.com/api_collections.html`, a page an earlier
+    session's search missed). Three real sort tabs (Новые/Популярные/
+    Просматриваемые - verified live, each a genuinely different first page);
+    "Категории"/"Подписки" from kino.watch's own page are not offered (no
+    matching real sort/endpoint). No pagination on the collection-view screen
+    on purpose - upstream has none (a 67-item collection came back as one
+    response, no `pagination` key). **Found and fixed a bug shared with
+    "Закладки" while verifying live**: opening an item from inside a
+    folder/collection, then pressing Back (details' own button, or the
+    remote's hardware Back key - both go through `history.back()`), dropped
+    straight to the top-level list instead of the folder/collection, because
+    entering one never pushed its own hash entry. Fixed by extending
+    `route(name, subId)` - the same call `applyHash()` now makes on the way
+    back - so the hash trail matches the actual navigation depth for both
+    features.
 22. **"Длительность" splits movie vs series math** - a movie's `videos`/
     `media` entries are alternate versions of the same film (verified live on
     "Дюна: Часть вторая" - "24 fps"/"48 fps", KinoPub's own `duration.total`
@@ -348,9 +371,9 @@ Backend 0.9.79 → 0.9.94 this stretch, frontend tests 159 → 283:
   reads this bridge's local SQLite, never KinoPub's own cross-device
   position.
 - ~~FFmpeg removability still an open question.~~ **Resolved** - see item #21; `WITH_FFMPEG=0` in `.env` builds without it.
-- **`v1/collections`** (real curated collections/подборки, "Подборки"
-  sidebar button still dead) — confirmed-real, unused endpoint. Not
-  requested yet.
+- ~~`v1/collections` (real curated collections/подборки, "Подборки" sidebar
+  button still dead) — confirmed-real, unused endpoint. Not requested yet.~~
+  **Resolved** — see item #23; "Подборки" is wired for real.
 - **"Новые эпизоды"** — see open item #2 at the top.
 - **HDR real-TV confirmation** — see open item #1 at the top.
 - **backend/app/__pycache__/main.cpython-311.pyc is tracked in git** and

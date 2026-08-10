@@ -220,7 +220,7 @@ body.auth-locked .sidebar,body.auth-locked .content-shell{visibility:hidden;poin
 
 /* ---- "Закладки": bookmark folder cards ---- */
 .bookmark-folder-art{display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,#2b3548,#1c2333)}
-.bookmark-folder-art svg{width:64px;height:64px;fill:none;stroke:var(--green);stroke-width:2;stroke-linejoin:round}
+.bookmark-folder-art svg{width:64px;height:64px;fill:none;stroke:var(--green);stroke-width:2;stroke-linejoin:round}.collection-stats{margin:-10px 0 16px;color:#8f98aa;font-size:13px}
 .bookmark-folder-card .item-title,.bookmark-folder-card .item-author{text-align:center}
 
 /* ---- Native fullscreen escape-hatch button ---- */
