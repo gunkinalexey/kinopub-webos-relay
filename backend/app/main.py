@@ -65,6 +65,12 @@ pending_devices: Dict[str, Dict[str, Any]] = {}
 debug_events = []
 page_count_cache: Dict[str, Dict[str, Any]] = {}
 profile_cache: Dict[str, Dict[str, Any]] = {}
+# Catalogue pages aren't personalised (watched/bookmark state comes from the
+# separate /watching/statuses and /history calls, never from /catalog/list
+# items) - short TTL is safe and cuts duplicate upstream hits from quick
+# back-and-forth sidebar navigation or more than one open tab/session.
+CATALOG_LIST_CACHE_TTL = 60
+catalog_list_cache: Dict[str, Dict[str, Any]] = {}
 audio_hls_jobs: Dict[str, Dict[str, Any]] = {}
 audio_hls_job_keys: Dict[str, str] = {}
 
@@ -151,7 +157,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.97', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.98', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -940,6 +946,10 @@ async def catalog_list(
     page = max(0, min(page, 9999))
     api_page = page + 1
     perpage = max(1, min(perpage, 100))
+    cache_key = json.dumps({'endpoint': endpoint, 'selector': selector, 'page': api_page, 'perpage': perpage}, sort_keys=True)
+    cached = catalog_list_cache.get(cache_key)
+    if cached and time.time() - cached['at'] < CATALOG_LIST_CACHE_TTL:
+        return cached['data']
     session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, endpoint, {**selector, 'page': api_page, 'perpage': perpage})
     items = extract_catalog_items(payload)
@@ -953,7 +963,7 @@ async def catalog_list(
     # A full page is evidence that a following page may exist. Some KinoPub
     # shortcut responses omit totals or expose stale/ambiguous pagination data.
     has_next = (page + 1 < total_pages) if total_pages > 1 else (len(items) >= perpage)
-    return {
+    result = {
         'section': section,
         'selector': selector,
         'feed': feed,
@@ -964,6 +974,8 @@ async def catalog_list(
         'has_next': has_next,
         'items': items,
     }
+    catalog_list_cache[cache_key] = {'at': time.time(), 'data': result}
+    return result
 
 
 

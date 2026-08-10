@@ -1933,7 +1933,14 @@ function initializeAuthenticatedApp(){state.authenticated=true;setAuthLocked(fal
  // so an unreachable /health degrades to the old try-and-see behaviour
  // rather than disabling a feature that may well work.
  KPApi.health().then(function(x){state.serverFfmpeg=x&&x.ffmpeg!==undefined?!!x.ffmpeg:null;}).catch(function(){});
- if(!state.appInitialized){state.appInitialized=true;applyHash();loadSettings();}else if(state.sessionExpired){state.sessionExpired=false;var scr=visibleScreen();if(scr==='detailsScreen'&&state.current)openDetails(state.current);else if(scr==='searchScreen')doSearch(state.searchMode);else renderCatalog();}loadProfile(true);loadWatchedStatuses();loadWatchingCount();}
+ if(!state.appInitialized){state.appInitialized=true;applyHash();loadSettings();}else if(state.sessionExpired){state.sessionExpired=false;var scr=visibleScreen();if(scr==='detailsScreen'&&state.current)openDetails(state.current);else if(scr==='searchScreen')doSearch(state.searchMode);else renderCatalog();}
+ // false, not true: the backend already caches /profile for 5 minutes
+ // (see profile_cache in main.py) and a subscription's day-count doesn't
+ // need to be exact to the second. Every page load used to force-bypass
+ // that cache and hit KinoPub's /v1/user fresh - "Обновить статус" in the
+ // subscription modal (refreshSubscription -> loadProfile(true)) is the
+ // one place that still should, and still does.
+ loadProfile(false);loadWatchedStatuses();loadWatchingCount();}
 // A 401 from any authenticated call means the session died mid-use (cookie
 // gone, or KinoPub's refresh token was revoked server-side) - show the exact
 // same gate as a first-time visitor instead of leaving whatever error text
