@@ -42,19 +42,26 @@ Two things worth knowing about on pickup:
    (`readyState 0`, no bytes, fetch times out), while the exact same URL
    returns `206 Partial Content` from the host and from the backend
    container. Do not read a sandbox direct-playback failure as a bug.
-2. **"Новые эпизоды" sidebar link is still dead, deliberately deferred.**
-   Not blocked on guessing — kino.watch's own page for it
-   (`/media/new-serial-episodes?type=serial|docuserial|tvshow`) is a
-   catalogue-wide per-episode feed (522 pages) that (a) isn't in any of
-   kinoapi.com's 14 documented API pages under any name tried, and (b) is
-   **fully server-rendered** on kino.watch's own backend with zero
-   client-side XHR to sniff — confirmed by loading the real page live and
-   checking its network requests. The DevTools-sniffing method that
-   resolved earlier open questions (marktime/toggle, see README history)
-   categorically cannot work here. User chose to defer rather than have a
-   `v1/watching/serials`-based approximation built instead. If picked back
-   up, that's the only remaining honest option short of finding an
-   undocumented endpoint some other way.
+2. **"Новые эпизоды" and "Награды" sidebar buttons removed outright** (not
+   just left dead). Same root cause for both: real kino.watch site features
+   with no API equivalent, confirmed live, not guessed. "Новые эпизоды" -
+   kino.watch's own page for it (`/media/new-serial-episodes?type=...`) is a
+   catalogue-wide per-episode feed that's fully server-rendered on
+   kino.watch's own backend, zero client-side XHR to sniff (confirmed live,
+   checking real network requests) and not in any of kinoapi.com's
+   documented pages under any name tried. "Награды" - `v1/award`/`v1/awards`/
+   `v1/award/categories` all 404 live; no item field carries award/nomination
+   data (`v1/items/{id}` keys checked directly); no `v1/collections` entry
+   resembles an awards list either; `kinoapi.com/api_references.html` (the
+   page that *would* list something like an award-category reference,
+   parallel to genres/countries) has no such thing. Ceremony/year/category/
+   winner is kino.watch's own curation, not `api.service-kp.com` data.
+   User was offered three options (defer like a prior open item, remove the
+   button, or a different idea) and chose **remove** for both - done: buttons
+   deleted from `index.html` along with the now-unused `i-award` SVG symbol
+   (`i-new` stays, "Новинки" still uses it). If either is revisited, this is
+   the same "categorically cannot work via the API-bridging approach this
+   project uses" finding as before, not a "wasn't tried yet."
 
 ## What this project is
 
@@ -168,6 +175,10 @@ an honest smaller filter panel than a bigger one with dead switches.
 
 Backend 0.9.79 → 0.9.96 this stretch, frontend tests 159 → 304:
 
+25. **"Награды" and "Новые эпизоды" sidebar buttons removed** - see open item
+    #2 above for the live-verified reason both are impossible via the API,
+    not guessed. User's own call after being asked (defer / remove / other
+    idea) - chose remove.
 24. **История: "Все фильмы"/"Все эпизоды"** aggregate tabs, added alongside
     the existing per-type ones (kino.watch's own history page has both, not
     one instead of the other). `HISTORY_GROUPS` on the backend groups the
