@@ -153,7 +153,7 @@ body.auth-locked .sidebar,body.auth-locked .content-shell{visibility:hidden;poin
 .details-info>div:nth-child(4n+1),.details-info>div:nth-child(4n+2){background:rgba(255,255,255,.028)}
 .details-info-key{color:#8f98aa}
 .details-info-value{color:#e6e9ef}
-.details-info-value .accent{color:#4fd99a}
+.details-info-value .accent{color:#4fd99a}.accent-link{color:#4fd99a;background:transparent;border:0;padding:0;margin:0;font:inherit;cursor:pointer;text-decoration:none}.accent-link:hover,.accent-link:focus{color:#fff;text-decoration:underline}
 .details-info-value small{color:#79839a;margin-left:4px}
 .details-episodes{margin-bottom:28px}
 .details-seasons{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:14px}

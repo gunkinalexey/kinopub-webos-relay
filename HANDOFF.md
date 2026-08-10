@@ -76,7 +76,7 @@ read-only — **frontend changes are live immediately, no rebuild**.
 
 Backend version string lives at `app = FastAPI(..., version='0.9.NN', ...)`
 in `main.py` near the top; bump it whenever `backend/` changes so `/health`
-reflects what's actually deployed. **Currently: backend 0.9.96.**
+reflects what's actually deployed. **Currently: backend 0.9.97.**
 
 The real upstream API is `https://api.service-kp.com` (`API_BASE`). Docs at
 kinoapi.com are patchy and the domain is **intermittently unreachable via
@@ -93,13 +93,13 @@ inside the backend container instead (see "Verifying live" below).
 ## Current state
 
 - Branch: `rework/audio-subtitles-details` (not merged to `main`)
-- Backend running version: **0.9.96**, containers up via `docker compose up -d`
+- Backend running version: **0.9.97**, containers up via `docker compose up -d`
 - `curl http://localhost:8080/bridge/health` to check it's alive
 - Working tree has uncommitted changes at handoff time — the auto-commit
   hook (see below) picks them up at the end of the current turn if this
   handoff is being read mid-session; if you're starting fresh, they're
   probably already committed.
-- **304 frontend checks + 31 backend smoke checks, all green** (see Testing
+- **312 frontend checks + 36 backend smoke checks, all green** (see Testing
   below)
 
 ## How work has been happening (read this before doing anything)
@@ -173,8 +173,23 @@ an honest smaller filter panel than a bigger one with dead switches.
 
 ## Everything fixed/built, most recent first (README.md has full prose, this is the map)
 
-Backend 0.9.79 → 0.9.96 this stretch, frontend tests 159 → 304:
+Backend 0.9.79 → 0.9.97 this stretch, frontend tests 159 → 312:
 
+26. **Details-screen genre/country/year/director/cast badges are real links**
+    now, matching kino.watch's own `movie?years=X;X` and `item/search?
+    query=<name>&mode=director|actor`. Genre/country link only when KinoPub's
+    payload actually carries a numeric id (`genres_detailed`/
+    `countries_detailed`, `[{id,title}]` - an id-less entry stays plain text,
+    never a link to nothing); year filters that exact year on the same
+    section; director/cast open a real search in that person's own mode.
+    **Found a real, pre-existing bug while verifying live**: the "Актёры"/
+    "Режиссёры" search-mode tabs had been decorative from the start -
+    `mode` was never turned into anything upstream, so both silently ran the
+    same all-fields query as "Все". `v1/items/search`'s real `field` param
+    (documented on `api_video.html`'s own search section, not a separate
+    page this time - just easy to miss) was never wired. Fixed via
+    `SEARCH_MODE_FIELDS`; verified live (`field=director` for a real name:
+    13 titles, `field=cast`: 37, both zero before the fix).
 25. **"Награды" and "Новые эпизоды" sidebar buttons removed** - see open item
     #2 above for the live-verified reason both are impossible via the API,
     not guessed. User's own call after being asked (defer / remove / other

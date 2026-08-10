@@ -960,6 +960,45 @@ function detailsDurationValue(item){
  return single>0?esc(fmt(single))+' <small>/ ('+Math.round(single/60)+' мин)</small>':'';
 }
 function ratingCell(label,value,votes){var text=ratingText(value);if(text==='—')return '';var out='<span class="accent">'+esc(label)+' '+esc(text)+'</span>';if(votes>0)out+=' <small>/ '+esc(Number(votes).toLocaleString('ru-RU'))+'</small>';return out+' ';}
+// Genre/country/year/director/actor badges are real links now, mirroring
+// kino.watch's own info table (movie?years=2026;2026,
+// item/search?query=<name>&mode=director|actor) rather than green text that
+// looks clickable and isn't. Genre/country need the real numeric id the
+// filter panel filters by - `_id_name_list` on the backend supplies it where
+// KinoPub's payload actually has one, `id:null` otherwise, and an
+// id-less entry renders as plain text here rather than a link to nowhere.
+// The click handling itself lives in one delegated listener on #detailsInfo
+// (wired once, see the bottom of the file) rather than a handler per badge,
+// since this whole block is built via one innerHTML string.
+function accentLink(attr,value,label){return '<button type="button" class="focusable accent-link" '+attr+'="'+esc(value)+'">'+esc(label)+'</button>';}
+function accentJoin(list){var parts=[];for(var i=0;i<list.length;i++){var v=String(list[i]||'').trim();if(v)parts.push('<span class="accent">'+esc(v)+'</span>');}return parts.join(', ');}
+// Genres/countries: `_detailed` is `[{id,title}]` from the backend; a
+// missing/undocumented id (`_id_name_list` returns `id:null` rather than
+// guessing one) falls back to plain text - unfiltered as a link is worse
+// than not being one.
+function detailedJoin(list,attr){
+ var parts=[];
+ for(var i=0;i<(list||[]).length;i++){
+  var entry=list[i],title=String(entry&&entry.title||'').trim();if(!title)continue;
+  parts.push(entry.id!==null&&entry.id!==undefined&&entry.id!==''?accentLink(attr,entry.id,title):'<span class="accent">'+esc(title)+'</span>');
+ }
+ return parts.join(', ');
+}
+// Directors/cast: no id to filter by (there is no such `v1/items` field at
+// all, confirmed live long before this feature - see the filter panel's own
+// history), but kino.watch links these to a name search
+// (item/search?query=<name>&mode=director|actor), which this bridge's
+// search already supports for real. One button per person, not one button
+// for the whole joined string, so clicking "Дени Вильнёв" only searches for
+// him even when the row lists several names.
+function personJoin(names,mode){
+ var parts=[];
+ for(var i=0;i<(names||[]).length;i++){
+  var name=String(names[i]||'').trim();if(!name)continue;
+  parts.push('<button type="button" class="focusable accent-link" data-person-mode="'+esc(mode)+'" data-person-name="'+esc(name)+'">'+esc(name)+'</button>');
+ }
+ return parts.join(', ');
+}
 function detailsInfoRows(item){
  var rows=[];
  var rating=ratingCell('КП',item.kinopoisk_rating,item.kinopoisk_votes)+ratingCell('IMDb',item.imdb_rating,item.imdb_votes)+ratingCell('KinoPub',item.rating,0);
@@ -967,11 +1006,15 @@ function detailsInfoRows(item){
  if(item.seasons_count>0)rows.push(['Всего',esc(plural(item.seasons_count,'сезон','сезона','сезонов')+' и '+plural(item.episodes_count,'эпизод','эпизода','эпизодов'))]);
  if(item.finished===false)rows.push(['Статус','<span class="accent">Выходит</span>']);
  else if(item.finished===true)rows.push(['Статус','Завершён']);
- if(item.year)rows.push(['Год выхода','<span class="accent">'+esc(item.year)+'</span>']);
- if((item.countries||[]).length)rows.push(['Страна',accentJoin(item.countries)]);
- if((item.genres||[]).length)rows.push(['Жанр',accentJoin(item.genres)]);
- if(item.director)rows.push(['Режиссёр',accentJoin(String(item.director).split(','))]);
- if((item.cast||[]).length)rows.push(['В ролях',accentJoin(item.cast)]);
+ if(item.year&&detailsFilterSection(item))rows.push(['Год выхода',accentLink('data-year-link',item.year,String(item.year))]);
+ else if(item.year)rows.push(['Год выхода','<span class="accent">'+esc(item.year)+'</span>']);
+ if((item.countries_detailed||[]).length)rows.push(['Страна',detailedJoin(item.countries_detailed,'data-country-id')]);
+ else if((item.countries||[]).length)rows.push(['Страна',accentJoin(item.countries)]);
+ if((item.genres_detailed||[]).length)rows.push(['Жанр',detailedJoin(item.genres_detailed,'data-genre-id')]);
+ else if((item.genres||[]).length)rows.push(['Жанр',accentJoin(item.genres)]);
+ var directors=(item.directors&&item.directors.length)?item.directors:(item.director?String(item.director).split(','):[]);
+ if(directors.length)rows.push(['Режиссёр',personJoin(directors,'director')]);
+ if((item.cast||[]).length)rows.push(['В ролях',personJoin(item.cast,'actor')]);
  var durationValue=detailsDurationValue(item);
  if(durationValue)rows.push(['Длительность',durationValue]);
  if(item.quality)rows.push(['Качество',esc(item.quality)]);
@@ -980,7 +1023,27 @@ function detailsInfoRows(item){
  return rows;
 }
 function plural(n,one,few,many){n=Math.abs(Number(n)||0);var mod10=n%10,mod100=n%100;var word=(mod10===1&&mod100!==11)?one:((mod10>=2&&mod10<=4&&(mod100<10||mod100>=20))?few:many);return n+' '+word;}
-function accentJoin(list){var parts=[];for(var i=0;i<list.length;i++){var v=String(list[i]||'').trim();if(v)parts.push('<span class="accent">'+esc(v)+'</span>');}return parts.join(', ');}
+// Which catalogue route a genre/country/year filter click on this item's
+// info table should land in. `item.type` is already one of `routes`' own
+// keys for every real content type this bridge knows (movie/3d/serial/
+// concert/documovie/docuserial/tvshow) - confirmed by normalize_catalog_item
+// always defaulting `type` to 'movie', never leaving it blank - so this is a
+// direct lookup, not a guessed mapping.
+function detailsFilterSection(item){var type=String(item&&item.type||'').toLowerCase();return routes[type]?type:'';}
+// Filters the catalogue section this item belongs to and navigates there,
+// leaving the details screen the way any other sidebar navigation already
+// does. Opens with the filter panel visible so the applied value is obvious
+// and adjustable, not a silent redirect.
+function openDetailsFilter(item,patch){
+ var section=detailsFilterSection(item);if(!section)return;
+ var cfg=routes[section];
+ state.catalogFilters[filterStorageKey(cfg)]=patch;
+ state.filterPanelOpen=true;
+ route(section);
+}
+function openGenreFilter(item,genreId){openDetailsFilter(item,{genre:String(genreId)});}
+function openCountryFilter(item,countryId){openDetailsFilter(item,{country:String(countryId)});}
+function openYearFilter(item,year){openDetailsFilter(item,{year_from:String(year),year_to:String(year)});}
 function renderDetailsInfo(item){var rows=detailsInfoRows(item),html='';for(var i=0;i<rows.length;i++)html+='<div class="details-info-key">'+esc(rows[i][0])+'</div><div class="details-info-value">'+rows[i][1]+'</div>';$('detailsInfo').innerHTML=html;}
 function renderDetailsTabs(item){
  var tabs=[{id:'plot',title:'Сюжет'}],audios=detailsTrackList(item,'audios'),subs=detailsTrackList(item,'subtitles');
@@ -1922,7 +1985,21 @@ function move(dir){var a=visibleFocus(),cur=document.activeElement;if(a.indexOf(
 document.onkeydown=function(e){var k=e.keyCode;if(k>=37&&k<=40){e.preventDefault();move(k===37?'left':k===38?'up':k===39?'right':'down');}else if(k===13&&document.activeElement&&document.activeElement.click){e.preventDefault();document.activeElement.click();}else if(k===461||k===27||k===10009){e.preventDefault();if(!$('playerLayer').classList.contains('hidden'))closePlayer();else if(!$('apiExplorerModal').classList.contains('hidden'))closeExplorer();else if(!$('diagnosticsModal').classList.contains('hidden'))$('diagnosticsModal').classList.add('hidden');else if(!$('authModal').classList.contains('hidden'))closeAuth();else if(!$('subscriptionModal').classList.contains('hidden'))closeSubscription();else if(!$('detailsScreen').classList.contains('hidden'))history.back();else route('popular');}};
 video.ontimeupdate=updatePlayerProgress;function updatePlayButton(){var b=$('togglePlay');if(!b)return;var paused=video.paused;b.setAttribute('aria-label',paused?'Воспроизвести':'Пауза');b.title=paused?'Воспроизвести':'Пауза';b.innerHTML=paused?'<svg class="icon-play" viewBox="0 0 48 48" aria-hidden="true"><path d="M17 11l22 13-22 13z"/></svg>':'<svg class="icon-pause" viewBox="0 0 48 48" aria-hidden="true"><rect x="14" y="11" width="7" height="26" rx="2"/><rect x="27" y="11" width="7" height="26" rx="2"/></svg>';};video.onplay=function(){updatePlayButton();};video.onpause=function(){updatePlayButton();saveProgress();};video.onerror=function(){var c={1:'Воспроизведение прервано',2:'Сетевая ошибка',3:'Ошибка декодирования',4:'Формат не поддерживается'};mediaError(c[video.error&&video.error.code]||'Ошибка видео');};video.onended=function(){updatePlayButton();saveProgress();if(state.route!=='settings')renderCatalog();};
 var links=document.querySelectorAll('[data-route]');for(var i=0;i<links.length;i++)links[i].onclick=(function(r){return function(){route(r);};}(links[i].getAttribute('data-route')));
-var iconRadios=document.querySelectorAll('input[name="appIcon"]');for(var ir=0;ir<iconRadios.length;ir++)iconRadios[ir].onchange=function(){applyBranding(this.value);};$('searchGo').onclick=function(){doSearch();};$('searchInput').oninput=requestSuggestions;$('searchInput').onfocus=requestSuggestions;$('searchInput').onkeydown=function(e){var k=e.keyCode;if(k===40&&!$('searchSuggestions').classList.contains('hidden')){e.preventDefault();e.stopPropagation();setSuggestionIndex(state.suggestionIndex+1);return;}if(k===38&&!$('searchSuggestions').classList.contains('hidden')){e.preventDefault();e.stopPropagation();setSuggestionIndex(state.suggestionIndex-1);return;}if(k===27){e.stopPropagation();hideSuggestions();return;}if(k===13){e.preventDefault();e.stopPropagation();var rows=suggestionRows();if(state.suggestionIndex>=0&&state.currentSuggestions[state.suggestionIndex]){openSuggestion(state.currentSuggestions[state.suggestionIndex]);return;}var value=$('searchInput').value.trim(),exact=null;for(var si=0;si<state.currentSuggestions.length;si++){if((state.currentSuggestions[si].value||'').trim()===value){exact=state.currentSuggestions[si];break;}}if(exact){openSuggestion(exact);}else doSearch();}};var searchModes=document.querySelectorAll('[data-search-mode]');for(var sm=0;sm<searchModes.length;sm++)searchModes[sm].onclick=(function(mode){return function(){state.searchMode=mode;doSearch(mode);};}(searchModes[sm].getAttribute('data-search-mode')));document.addEventListener('click',function(e){if(!$('searchHead').contains(e.target))hideSuggestions();});$('loginButton').onclick=function(){if(!state.authenticated)showAuthGate();};$('authStart').onclick=startAuth;$('subscriptionChip').onclick=openSubscription;$('subscriptionClose').onclick=closeSubscription;$('subscriptionRefresh').onclick=refreshSubscription;$('authClose').onclick=closeAuth;$('authRestart').onclick=startAuth;$('detailsClose').onclick=function(){history.back();};$('saveSettings').onclick=saveSettings;$('clearCache').onclick=clearApplicationCache;$('diagnosticsButton').onclick=openDiag;$('diagnosticsClose').onclick=function(){$('diagnosticsModal').classList.add('hidden');};$('apiExplorerButton').onclick=openExplorer;$('apiExplorerClose').onclick=closeExplorer;$('explorerRun').onclick=runExplorer;$('compareFeeds').onclick=compareFeeds;$('explorerDownload').onclick=downloadExplorer;$('explorerCopy').onclick=copyExplorer;$('testDirect').onclick=function(){test('direct');};$('testRelay').onclick=function(){test('relay');};$('testHls').onclick=function(){test('hls');};var playbackFlashTimer=null,playerControlsTimer=null;
+var iconRadios=document.querySelectorAll('input[name="appIcon"]');for(var ir=0;ir<iconRadios.length;ir++)iconRadios[ir].onchange=function(){applyBranding(this.value);};$('searchGo').onclick=function(){doSearch();};$('searchInput').oninput=requestSuggestions;$('searchInput').onfocus=requestSuggestions;$('searchInput').onkeydown=function(e){var k=e.keyCode;if(k===40&&!$('searchSuggestions').classList.contains('hidden')){e.preventDefault();e.stopPropagation();setSuggestionIndex(state.suggestionIndex+1);return;}if(k===38&&!$('searchSuggestions').classList.contains('hidden')){e.preventDefault();e.stopPropagation();setSuggestionIndex(state.suggestionIndex-1);return;}if(k===27){e.stopPropagation();hideSuggestions();return;}if(k===13){e.preventDefault();e.stopPropagation();var rows=suggestionRows();if(state.suggestionIndex>=0&&state.currentSuggestions[state.suggestionIndex]){openSuggestion(state.currentSuggestions[state.suggestionIndex]);return;}var value=$('searchInput').value.trim(),exact=null;for(var si=0;si<state.currentSuggestions.length;si++){if((state.currentSuggestions[si].value||'').trim()===value){exact=state.currentSuggestions[si];break;}}if(exact){openSuggestion(exact);}else doSearch();}};var searchModes=document.querySelectorAll('[data-search-mode]');for(var sm=0;sm<searchModes.length;sm++)searchModes[sm].onclick=(function(mode){return function(){state.searchMode=mode;doSearch(mode);};}(searchModes[sm].getAttribute('data-search-mode')));document.addEventListener('click',function(e){if(!$('searchHead').contains(e.target))hideSuggestions();});$('loginButton').onclick=function(){if(!state.authenticated)showAuthGate();};$('authStart').onclick=startAuth;$('subscriptionChip').onclick=openSubscription;$('subscriptionClose').onclick=closeSubscription;$('subscriptionRefresh').onclick=refreshSubscription;$('authClose').onclick=closeAuth;$('authRestart').onclick=startAuth;$('detailsClose').onclick=function(){history.back();};
+// One delegated listener for every genre/country/year/director/actor badge
+// in the info table, since it is all built as one innerHTML string (see
+// detailsInfoRows/accentLink/personJoin above) rather than one listener per
+// badge. `state.current` is safe to read here: renderDetails() sets it to
+// the exact item this table was built from, and the badges cannot outlive
+// that render (the whole table is replaced on every renderDetailsInfo call).
+$('detailsInfo').addEventListener('click',function(e){
+ var t=e.target&&e.target.closest?e.target.closest('[data-genre-id],[data-country-id],[data-year-link],[data-person-name]'):null;
+ if(!t||!state.current)return;
+ if(t.hasAttribute('data-genre-id'))openGenreFilter(state.current,t.getAttribute('data-genre-id'));
+ else if(t.hasAttribute('data-country-id'))openCountryFilter(state.current,t.getAttribute('data-country-id'));
+ else if(t.hasAttribute('data-year-link'))openYearFilter(state.current,t.getAttribute('data-year-link'));
+ else if(t.hasAttribute('data-person-name'))doSearch(t.getAttribute('data-person-mode'),t.getAttribute('data-person-name'));
+});$('saveSettings').onclick=saveSettings;$('clearCache').onclick=clearApplicationCache;$('diagnosticsButton').onclick=openDiag;$('diagnosticsClose').onclick=function(){$('diagnosticsModal').classList.add('hidden');};$('apiExplorerButton').onclick=openExplorer;$('apiExplorerClose').onclick=closeExplorer;$('explorerRun').onclick=runExplorer;$('compareFeeds').onclick=compareFeeds;$('explorerDownload').onclick=downloadExplorer;$('explorerCopy').onclick=copyExplorer;$('testDirect').onclick=function(){test('direct');};$('testRelay').onclick=function(){test('relay');};$('testHls').onclick=function(){test('hls');};var playbackFlashTimer=null,playerControlsTimer=null;
 function showPlayerControls(){var layer=$('playerLayer');if(!layer)return;layer.classList.remove('controls-hidden');if(playerControlsTimer){clearTimeout(playerControlsTimer);playerControlsTimer=null;}if(!video.paused&&!video.ended){playerControlsTimer=setTimeout(function(){if(!video.paused&&!video.ended&&!layer.classList.contains('hidden'))layer.classList.add('controls-hidden');},3000);}}
 function keepPlayerControlsVisible(){var layer=$('playerLayer');if(layer)layer.classList.remove('controls-hidden');if(playerControlsTimer){clearTimeout(playerControlsTimer);playerControlsTimer=null;}}
 function showPlaybackFlash(kind){var flash=$('playbackFlash'),icon=$('playbackFlashIcon');if(!flash||!icon)return;if(playbackFlashTimer)clearTimeout(playbackFlashTimer);flash.classList.remove('show');icon.className='playback-flash-icon '+kind;void flash.offsetWidth;flash.classList.add('show');playbackFlashTimer=setTimeout(function(){flash.classList.remove('show');},500);}

@@ -151,7 +151,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.96', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.97', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -1693,22 +1693,64 @@ async def catalog_autocomplete(q: str) -> Dict[str, Any]:
     return {'items': items}
 
 
+SEARCH_MODE_FIELDS = {'title': 'title', 'actor': 'cast', 'director': 'director'}
+
+
 @app.get('/catalog/search')
 async def catalog_search(q: str, mode: str = 'all', kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """`v1/items/search`'s real `field` parameter - documented (only on
+    `api_video.html`'s search section, easy to miss) as "поиск только в одном
+    из полей title,director,cast" - was never wired here, so "Актёры"/
+    "Режиссёры" search mode always ran the exact same all-fields query as
+    "Все" and the title-only client-side narrowing above stood in for
+    `field=title`. Found while wiring the details screen's own director/cast
+    badges to this same search: clicking "Дени Вильнёв" (director of "Дюна:
+    Часть вторая") returned zero results, because a person's name searched
+    against an all-fields/title-shaped result is not the same as searching
+    it *as a director*. Verified live: `field=director` for that exact name
+    returns 13 real title, `field=cast` for a cast member returns 37 - the
+    parameter genuinely narrows, it was just never sent.
+    """
     query = q.strip()
     if not query:
         return {'query': '', 'mode': mode, 'items': []}
     session = await refresh_if_needed(kp_session or '', session_get(kp_session))
-    # The public API exposes a general search endpoint. The mode is retained in
-    # the response/UI; title mode additionally narrows obvious non-title hits.
-    payload = await kino_get(session, 'v1/items/search', {'q': query, 'page': 0, 'perpage': 60})
+    params: Dict[str, Any] = {'q': query, 'page': 0, 'perpage': 60}
+    field = SEARCH_MODE_FIELDS.get(mode)
+    if field:
+        params['field'] = field
+    payload = await kino_get(session, 'v1/items/search', params)
     items = extract_catalog_items(payload)
-    if mode == 'title':
-        q_lower = query.lower()
-        narrowed = [item for item in items if q_lower in str(item.get('title', '')).lower() or q_lower in str(item.get('original_title', '')).lower()]
-        if narrowed:
-            items = narrowed
     return {'query': query, 'mode': mode, 'items': items}
+
+
+def _id_name_list(value: Any) -> List[Dict[str, Any]]:
+    """Like `_name_list`, but keeps the id when the payload actually has one.
+
+    Needed anywhere a genre/country badge on the details screen has to link
+    to a real filter - the filter panel filters `v1/items` by numeric id, not
+    by title text, and a comma-separated-string payload (or a plain string
+    list) simply has no id to give. Those entries get `id: None` and the
+    frontend renders them as plain text rather than a link that would filter
+    on nothing.
+    """
+    out: List[Dict[str, Any]] = []
+    if isinstance(value, list):
+        for entry in value:
+            if isinstance(entry, dict):
+                title = str(entry.get('title') or entry.get('name') or '').strip()
+                if title:
+                    out.append({'id': entry.get('id'), 'title': title})
+            elif entry:
+                title = str(entry).strip()
+                if title:
+                    out.append({'id': None, 'title': title})
+    elif isinstance(value, str):
+        for part in value.split(','):
+            title = part.strip()
+            if title:
+                out.append({'id': None, 'title': title})
+    return out
 
 
 def _name_list(value: Any) -> List[str]:
@@ -1776,7 +1818,14 @@ def _item_details(raw: Dict[str, Any], media: List[Dict[str, Any]]) -> Dict[str,
     seasons = {str(entry.get('season') or 1) for entry in media}
     return {
         'countries': _name_list(raw.get('countries') or raw.get('country')),
+        # `_detailed` pairs feed the clickable genre/country badges on the
+        # details screen (id -> real filter, matching kino.watch's own
+        # ?genre=/?country= links); the plain string lists above stay as they
+        # were for the catalogue card and anything that just wants text.
+        'countries_detailed': _id_name_list(raw.get('countries') or raw.get('country')),
+        'genres_detailed': _id_name_list(raw.get('genres')),
         'director': ', '.join(_name_list(raw.get('director') or raw.get('directors'))),
+        'directors': _name_list(raw.get('director') or raw.get('directors')),
         'cast': _name_list(raw.get('cast') or raw.get('actors')),
         'duration': int(duration) if duration else 0,
         'duration_average': int(duration_average) if duration_average else 0,

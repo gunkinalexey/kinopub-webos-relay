@@ -28,6 +28,12 @@ const ITEM = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixture.json'), 'u
 
 let similarCalls = [];
 let similarAnswer = () => Promise.resolve({ items: [] });
+// Genre/country/year badges navigate to a real catalogue route, and
+// director/actor badges navigate to a real search - both leave the details
+// screen the same way any other cross-screen navigation in this app does,
+// so the stubs those routes need (catalog/genres/countries/search/pageCount)
+// have to exist here too, not just the details-screen-only ones above.
+const navCalls = [];
 global.KPApi = {
   status: () => new Promise(() => {}), settings: () => new Promise(() => {}),
   profile: () => new Promise(() => {}), report: () => Promise.resolve(),
@@ -40,6 +46,14 @@ global.KPApi = {
   // catalogue actually returns.
   similar: (id) => { similarCalls.push(id); return similarAnswer(); },
   history: () => Promise.resolve({items:[{media_id:'77035',episode_id:'813841',position:754,duration:2640,completed:0,updated_at:200}]}),
+  catalog: (section, feed, page, nonce, perpage, filters) => {
+    navCalls.push(['catalog', section, filters]);
+    return Promise.resolve({ items: [], page: 0, total_pages: 1, total_items: 0, has_next: false });
+  },
+  pageCount: () => new Promise(() => {}),
+  genres: () => Promise.resolve({ genres: [] }),
+  countries: () => Promise.resolve({ countries: [] }),
+  search: (q, mode) => { navCalls.push(['search', q, mode]); return Promise.resolve({ items: [] }); },
   imageProxyUrl: u => u, streamProxyUrl: u => u, hlsProxyUrl: u => u, subtitleProxyUrl: u => u,
 };
 window.KPApi = global.KPApi;
@@ -212,6 +226,49 @@ release({ items: [{ id: '1', title: 'Устаревший', poster: '' }] });
 await new Promise(r => setTimeout(r, 20));
 check('a late answer for the previous title is discarded',
   similarCards().map(c => c.querySelector('.item-title').textContent), ['Актуальный']);
+
+// Genre/country/year/director/actor badges: real links now (kino.watch's
+// own movie?years=2026;2026 and item/search?query=<name>&mode=director|actor),
+// not green text pretending to be clickable. Each test re-renders the
+// fixture fresh first, since the previous click already navigated away from
+// the details screen and torn the info table down.
+console.log('--- genre/country/year/director/actor badges are real links ---');
+const st = global.__app.state;
+const clickBadge = sel => qa(sel)[0] && qa(sel)[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+global.__app.renderDetails(ITEM);
+const freshKeys = [...qa('.details-info-key')].map(k => k.textContent);
+check('genres with a real id become buttons', qa('[data-genre-id]').length, 2);
+check('a genre with no id (KinoPub gave none) stays plain text, not a dead link',
+  [...qa('.details-info-value')][freshKeys.indexOf('Жанр')].querySelector('.accent').textContent, 'Спортивные');
+navCalls.length = 0; st.filterPanelOpen = false;
+clickBadge('[data-genre-id="9"]');
+check('clicking "Драма" filters this item\'s own section by that genre id',
+  navCalls[0], ['catalog', 'serial', { genre: '9' }]);
+check('and opens the filter panel so the applied value is visible', st.filterPanelOpen, true);
+
+global.__app.renderDetails(ITEM);
+navCalls.length = 0;
+clickBadge('[data-country-id="1"]');
+check('clicking "США" filters by that country id', navCalls[0], ['catalog', 'serial', { country: '1' }]);
+
+global.__app.renderDetails(ITEM);
+navCalls.length = 0;
+clickBadge('[data-year-link]');
+check('clicking the year filters this exact year, not a range guess',
+  navCalls[0], ['catalog', 'serial', { year_from: '2020', year_to: '2020' }]);
+
+global.__app.renderDetails(ITEM);
+navCalls.length = 0;
+clickBadge('[data-person-mode="director"]');
+check('clicking the director searches by name in director mode, matching kino.watch\'s own link',
+  navCalls[0], ['search', 'Деклан Лаундес', 'director']);
+
+global.__app.renderDetails(ITEM);
+navCalls.length = 0;
+clickBadge('[data-person-mode="actor"]');
+check('clicking a cast member searches that one name, not the whole joined list',
+  navCalls[0], ['search', 'Джейсон Судейкис', 'actor']);
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);

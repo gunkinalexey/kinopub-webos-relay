@@ -140,6 +140,31 @@ with TestClient(app, raise_server_exceptions=False) as client:
     r = client.get('/mock/search?q=')
     check('GET /mock/search', r.status_code == 200, f'HTTP {r.status_code} {r.text[:120]}')
 
+    # "Актёры"/"Режиссёры" search modes silently ran the same all-fields
+    # query as "Все" until this fix - v1/items/search's real `field` param
+    # was never sent. This locks in the mapping, not the live upstream
+    # result (no network in this suite).
+    from app.main import SEARCH_MODE_FIELDS
+    check('search mode -> real v1/items/search `field` value',
+          SEARCH_MODE_FIELDS == {'title': 'title', 'actor': 'cast', 'director': 'director'},
+          SEARCH_MODE_FIELDS)
+    check('"Все" sends no field param (searches every field, as documented)',
+          SEARCH_MODE_FIELDS.get('all') is None, SEARCH_MODE_FIELDS.get('all'))
+
+    # The details screen's clickable genre/country badges only link to a real
+    # filter when KinoPub's payload actually carried an id - an id-less entry
+    # must read as `id: None`, never a guessed/invented one.
+    from app.main import _id_name_list
+    check('id+title pairs pass through',
+          _id_name_list([{'id': 2, 'title': 'Боевик'}]) == [{'id': 2, 'title': 'Боевик'}],
+          _id_name_list([{'id': 2, 'title': 'Боевик'}]))
+    check('a plain string list (no id in the payload) gets id:None, not a fabricated one',
+          _id_name_list(['Спортивные']) == [{'id': None, 'title': 'Спортивные'}],
+          _id_name_list(['Спортивные']))
+    check('a comma-separated string (older payload shape) is split the same way',
+          _id_name_list('США, Канада') == [{'id': None, 'title': 'США'}, {'id': None, 'title': 'Канада'}],
+          _id_name_list('США, Канада'))
+
     # Bad input must be rejected cleanly, not blow up.
     r = client.get('/catalog/list?section=nope&feed=all')
     check('unknown section -> 400', r.status_code == 400, f'HTTP {r.status_code}')
