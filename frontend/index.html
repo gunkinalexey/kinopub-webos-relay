@@ -36,6 +36,7 @@
   <symbol id="i-thumb" viewBox="0 0 24 24"><path d="M9 10l3-7a2 2 0 012 2v4h5a2 2 0 012 2l-2 8H9v-9zm-6 0h4v9H3v-9z"/></symbol>
   <symbol id="i-imdb" viewBox="0 0 24 24"><path d="M2 6h20v12H2V6zm3 3v6h2V9H5zm4 0v6h2v-3l1 3h2l1-3v3h2V9h-2l-2 3-2-3H9zm10 0v6h1a2 2 0 002-2v-2a2 2 0 00-2-2h-1z"/></symbol>
   <symbol id="i-kp" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm-2 5v10H8V7h2zm2 0h4l-3 5 3 5h-2.5L11 12l2.5-5H12z"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></symbol>
 </svg>
 
 <div id="app" class="app-shell">
@@ -132,7 +133,7 @@
     <main id="detailsScreen" class="screen hidden details-screen">
       <div id="detailsBackdrop" class="details-backdrop">
         <div class="details-backdrop-fade"></div>
-        <button id="detailsClose" class="focusable details-back">← Назад</button>
+        <button id="detailsClose" class="focusable details-back"><svg class="back-arrow"><use href="#i-back"/></svg>Назад</button>
         <button id="detailsWatchlist" class="focusable details-watchlist hidden" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5c-6 0-9.5 5.5-10.5 7 1 1.5 4.5 7 10.5 7s9.5-5.5 10.5-7c-1-1.5-4.5-7-10.5-7z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg><span>Я смотрю</span></button>
         <div class="details-headline"><h2 id="detailsTitle"></h2><div id="detailsOriginal" class="details-original"></div></div>
       </div>

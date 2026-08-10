@@ -720,7 +720,7 @@ function renderBookmarkFolderItems(folderId){
  var root=$('catalogTop');root.innerHTML='';
  var known=(state.bookmarkFoldersCache||[]).filter(function(f){return String(f.id)===String(folderId);})[0];
  var head=document.createElement('div');head.className='catalog-title-row';
- head.innerHTML='<h3><button id="bookmarksBack" class="focusable title-link" type="button">← Закладки</button>&nbsp;&nbsp;'+esc(known?known.title:'')+'</h3>';
+ head.innerHTML='<h3><button id="bookmarksBack" class="focusable title-link" type="button"><svg class="back-arrow"><use href="#i-back"/></svg>Закладки</button>&nbsp;&nbsp;'+esc(known?known.title:'')+'</h3>';
  root.appendChild(head);
  var back=head.querySelector('#bookmarksBack');if(back)back.onclick=function(){state.bookmarkFolder=null;renderCatalog();pushHash(encodeRouteHash('bookmarks'));};
  // Reads/writes through the normal catalogPageKey()/setCatalogPage() path
@@ -810,7 +810,7 @@ function renderCollectionHead(collection){
  var root=$('catalogTop');root.innerHTML='';
  var head=document.createElement('div');head.className='catalog-title-row';
  var title=collection?esc(collection.title||''):'';
- head.innerHTML='<h3><button id="collectionsBack" class="focusable title-link" type="button">← Подборки</button>'+(title?'&nbsp;&nbsp;'+title:'')+'</h3>';
+ head.innerHTML='<h3><button id="collectionsBack" class="focusable title-link" type="button"><svg class="back-arrow"><use href="#i-back"/></svg>Подборки</button>'+(title?'&nbsp;&nbsp;'+title:'')+'</h3>';
  root.appendChild(head);
  head.querySelector('#collectionsBack').onclick=function(){state.collectionId=null;renderCatalog();pushHash(encodeRouteHash('collections'));};
  if(collection){var stats=document.createElement('div');stats.className='collection-stats';stats.innerHTML=collectionStatLine(collection);root.appendChild(stats);}
