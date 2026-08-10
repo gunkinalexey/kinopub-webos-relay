@@ -69,7 +69,7 @@ read-only — **frontend changes are live immediately, no rebuild**.
 
 Backend version string lives at `app = FastAPI(..., version='0.9.NN', ...)`
 in `main.py` near the top; bump it whenever `backend/` changes so `/health`
-reflects what's actually deployed. **Currently: backend 0.9.93.**
+reflects what's actually deployed. **Currently: backend 0.9.94.**
 
 The real upstream API is `https://api.service-kp.com` (`API_BASE`). Docs at
 kinoapi.com are patchy and the domain is **intermittently unreachable via
@@ -86,13 +86,13 @@ inside the backend container instead (see "Verifying live" below).
 ## Current state
 
 - Branch: `rework/audio-subtitles-details` (not merged to `main`)
-- Backend running version: **0.9.93**, containers up via `docker compose up -d`
+- Backend running version: **0.9.94**, containers up via `docker compose up -d`
 - `curl http://localhost:8080/bridge/health` to check it's alive
 - Working tree has uncommitted changes at handoff time — the auto-commit
   hook (see below) picks them up at the end of the current turn if this
   handoff is being read mid-session; if you're starting fresh, they're
   probably already committed.
-- **280 frontend checks + 29 backend smoke checks, all green** (see Testing
+- **283 frontend checks + 29 backend smoke checks, all green** (see Testing
   below)
 
 ## How work has been happening (read this before doing anything)
@@ -166,8 +166,17 @@ an honest smaller filter panel than a bigger one with dead switches.
 
 ## Everything fixed/built, most recent first (README.md has full prose, this is the map)
 
-Backend 0.9.79 → 0.9.93 this stretch, frontend tests 159 → 280:
+Backend 0.9.79 → 0.9.94 this stretch, frontend tests 159 → 283:
 
+22. **"Длительность" splits movie vs series math** - a movie's `videos`/
+    `media` entries are alternate versions of the same film (verified live on
+    "Дюна: Часть вторая" - "24 fps"/"48 fps", KinoPub's own `duration.total`
+    is their sum, ~5h33m for a ~2h47m movie), so a movie shows the first
+    entry's own duration and never `duration`/`duration_average`. A series
+    (`type` serial/docuserial/tvshow) shows both as intended: "одной серии ≈
+    .../ , всего сериала: X дн. Y час. Z мин.", leading all-zero units
+    dropped. `_item_details` now also exposes `duration_average`
+    (`duration.average`).
 21. **FFmpeg is now optional at build time** - `WITH_FFMPEG=0` in `.env`
     builds a backend image without it (900 MB -> 273 MB measured, and apt is
     not contacted at all). This closes the "FFmpeg removability" open

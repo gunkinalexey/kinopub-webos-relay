@@ -90,7 +90,12 @@ check('rating cell', val('Рейтинг'), 'КП 8.5 / 142 415 IMDb 8.7 / 453 3
 check('totals pluralised', val('Всего'), '4 сезона и 36 эпизодов');
 check('ongoing status', val('Статус'), 'Выходит');
 check('countries', val('Страна'), 'США, Великобритания');
-check('duration', val('Длительность'), '45:00 / 45 мин');
+// Series: average-episode length + whole-series total, both from KinoPub's
+// own duration.average/duration.total - not derived from the two sample
+// episodes the fixture happens to carry, since real payloads send both
+// numbers directly regardless of how much of the episode list is present.
+check('series duration: average episode + whole-series total',
+  val('Длительность'), 'одной серии ≈ 46:00 / (46 мин), всего сериала: 1 дн. 3 час. 36 мин.');
 
 check('season pills', [...qa('.season-pill')].map(p => p.textContent), ['1','2','3','4']);
 check('first season active', q('.season-pill.active').textContent, '1');
@@ -110,6 +115,32 @@ check('season 2 code', q('.episode-code').textContent, 'S02E01');
 check('audio tab active', q('.details-tab.active').textContent, 'Аудио');
 check('audio list rendered', [...qa('#detailsTabBody li')].map(l => l.textContent),
   ['Русский · Дубляж · LostFilm · 5.1 · EAC3', 'Английский · Оригинал · 2.0 · AAC']);
+
+// A movie's `videos`/`media` entries are ALTERNATE VERSIONS of the same
+// film, not a sequence - verified live on "Дюна: Часть вторая": two entries,
+// "24 fps" and "48 fps", and KinoPub's own duration.total/average are their
+// sum/mean (~5h33m for a ~2h47m movie). Summing alternate cuts is
+// meaningless, so a movie must always show the first entry's own duration
+// and ignore item.duration/duration_average entirely - the opposite of what
+// a series does with the same-shaped fields.
+console.log('--- movie: alternate versions are not summed, first entry wins ---');
+const MOVIE = Object.assign({}, ITEM, {
+  id: 'm100468', type: 'movie', title: 'Дюна: Часть вторая', original_title: 'Dune: Part Two',
+  seasons: [], seasons_count: 0, episodes_count: 0,
+  duration: 19965, duration_average: 9982.5,
+  media: [
+    { id: 'v1', title: '24 fps', duration: 10016 },
+    { id: 'v2', title: '48 fps', duration: 9949 },
+  ],
+});
+global.__app.renderDetails(MOVIE);
+const movieKeys = [...qa('.details-info-key')].map(k => k.textContent);
+const movieVal = i => qa('.details-info-value')[movieKeys.indexOf(i)].textContent.replace(/\s+/g, ' ').trim();
+check('uses the first entry\'s own duration, not KinoPub\'s alternate-version total',
+  movieVal('Длительность'), '02:46:56 / (167 мин)');
+check('no "одной серии"/"всего сериала" wording for a movie',
+  /серии|сериала/.test(movieVal('Длительность')), false);
+check('no season total row when there are no real seasons', movieKeys.includes('Всего'), false);
 
 console.log('--- details is a screen, not an overlay ---');
 const app2 = global.__app;

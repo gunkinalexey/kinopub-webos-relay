@@ -801,10 +801,50 @@ function applyHash(){
 function route(name){var before=document.activeElement;if(name==='settings'){state.route=name;showScreen('settingsScreen');loadSettings();}else{resetNavigationState(name);state.route=name;showScreen('catalogScreen');renderCatalog();}var links=document.querySelectorAll('[data-route]');for(var i=0;i<links.length;i++)links[i].classList.toggle('active',links[i].getAttribute('data-route')===name || (name==='new'&&links[i].getAttribute('data-route')==='popular'));setTimeout(function(){var target=routeFocusTarget(name,before);if(target)try{target.focus();}catch(e){}},20);pushHash(encodeRouteHash(name));}
 function detailsMediaList(item){if(item.seasons&&item.seasons.length){var all=[];for(var s=0;s<item.seasons.length;s++)all=all.concat(item.seasons[s].episodes||[]);return all;}return item.media||[];}
 function detailsTrackList(item,field){var media=detailsMediaList(item),seen={},out=[];for(var i=0;i<media.length;i++){var list=media[i][field]||[];for(var j=0;j<list.length;j++){var label=field==='audios'?detailedAudioLabel(list[j],out.length,false):detailedSubtitleLabel(list[j],out.length,false);var body=label.replace(/^\d+\.\s*/,'');if(body&&!seen[body]){seen[body]=true;out.push(body);}}}return out;}
-function detailsDurationSeconds(item){var direct=Number(item.duration);if(isFinite(direct)&&direct>0)return direct;var media=detailsMediaList(item);for(var i=0;i<media.length;i++){var d=Number(media[i].duration);if(isFinite(d)&&d>0)return d;}return 0;}
+// Movie vs series duration is not a UI choice, it is forced by what KinoPub's
+// numbers actually mean: `videos[]` on a *movie* holds alternate versions of
+// the same film (verified live on "Дюна: Часть вторая" - "24 fps" and
+// "48 fps" entries, `duration.total` = their sum, ~5h33m for a ~2h47m movie),
+// while on a serial it genuinely is the episode list. Summing alternate cuts
+// is meaningless, so a movie always shows its first entry's own duration; a
+// series shows the average-episode/whole-series pair from `duration_average`/
+// `duration` (backend's `_item_details` explains the same split).
+var EPISODIC_ITEM_TYPES={serial:1,docuserial:1,tvshow:1,series:1};
+function isEpisodicItem(item){return !!(item&&EPISODIC_ITEM_TYPES[String(item.type||'').toLowerCase()]);}
+// The first entry with a real duration - "если несколько" - not necessarily
+// media[0] itself, in case an alternate version is missing its own number.
+// `item.duration` (KinoPub's `duration.total`) is a last-resort fallback for
+// the rare item with no media entries at all; for a movie with more than one
+// entry it must never be used, since it is the alternate-versions sum above.
+function detailsFirstEpisodeDuration(item){var media=detailsMediaList(item);for(var i=0;i<media.length;i++){var d=Number(media[i].duration);if(isFinite(d)&&d>0)return d;}var direct=Number(item.duration);return isFinite(direct)&&direct>0?direct:0;}
+// "2 дн. 23 час. 6 мин." - fixed abbreviations, not declined by count (kino.pub's
+// own style for this row). Rounds to the nearest minute before decomposing
+// into days/hours/minutes so a value like 59.6 rounded-up minutes cannot land
+// as both "0 час." and "60 мин." - decomposing the already-rounded total
+// avoids that double-rounding seam. Leading all-zero units are dropped (a
+// 1-hour docuseries reads "1 час. 23 мин.", not "0 дн. 1 час. 23 мин.").
+function formatTotalDuration(seconds){
+ var totalMinutes=Math.round(Math.max(0,Number(seconds)||0)/60);
+ var days=Math.floor(totalMinutes/1440),rem=totalMinutes%1440,hours=Math.floor(rem/60),minutes=rem%60;
+ var parts=[];
+ if(days>0)parts.push(days+' дн.');
+ if(days>0||hours>0)parts.push(hours+' час.');
+ parts.push(minutes+' мин.');
+ return parts.join(' ');
+}
+function detailsDurationValue(item){
+ if(isEpisodicItem(item)){
+  var avg=Number(item.duration_average)||0,total=Number(item.duration)||0,out='';
+  if(avg>0)out+='одной серии ≈ '+esc(fmt(avg))+' <small>/ ('+Math.round(avg/60)+' мин)</small>';
+  if(total>0)out+=(out?', ':'')+'всего сериала: '+esc(formatTotalDuration(total));
+  return out;
+ }
+ var single=detailsFirstEpisodeDuration(item);
+ return single>0?esc(fmt(single))+' <small>/ ('+Math.round(single/60)+' мин)</small>':'';
+}
 function ratingCell(label,value,votes){var text=ratingText(value);if(text==='—')return '';var out='<span class="accent">'+esc(label)+' '+esc(text)+'</span>';if(votes>0)out+=' <small>/ '+esc(Number(votes).toLocaleString('ru-RU'))+'</small>';return out+' ';}
 function detailsInfoRows(item){
- var rows=[],duration=detailsDurationSeconds(item);
+ var rows=[];
  var rating=ratingCell('КП',item.kinopoisk_rating,item.kinopoisk_votes)+ratingCell('IMDb',item.imdb_rating,item.imdb_votes)+ratingCell('KinoPub',item.rating,0);
  if(rating.trim())rows.push(['Рейтинг',rating]);
  if(item.seasons_count>0)rows.push(['Всего',esc(plural(item.seasons_count,'сезон','сезона','сезонов')+' и '+plural(item.episodes_count,'эпизод','эпизода','эпизодов'))]);
@@ -815,7 +855,8 @@ function detailsInfoRows(item){
  if((item.genres||[]).length)rows.push(['Жанр',accentJoin(item.genres)]);
  if(item.director)rows.push(['Режиссёр',accentJoin(String(item.director).split(','))]);
  if((item.cast||[]).length)rows.push(['В ролях',accentJoin(item.cast)]);
- if(duration>0)rows.push(['Длительность',esc(fmt(duration))+' <small>/ '+Math.round(duration/60)+' мин</small>']);
+ var durationValue=detailsDurationValue(item);
+ if(durationValue)rows.push(['Длительность',durationValue]);
  if(item.quality)rows.push(['Качество',esc(item.quality)]);
  var subs=(item.subtitle_langs||[]).map(audioLanguageName);
  if(subs.length)rows.push(['Субтитры',esc(subs.join(', '))]);

@@ -151,7 +151,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.93', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.94', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -1654,8 +1654,22 @@ def _vote_counts(raw: Dict[str, Any]) -> Dict[str, int]:
 
 
 def _item_details(raw: Dict[str, Any], media: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """The extra fields the details panel shows beyond a catalogue card."""
+    """The extra fields the details panel shows beyond a catalogue card.
+
+    ``duration`` here is the **total** across every entry under `videos`/
+    `episodes` (KinoPub's own `duration.total`) - genuinely meaningful for a
+    series, where it is the sum of real episodes. For a movie it is not: a
+    movie's `videos` array holds *alternate versions* of the same film, not a
+    sequence (verified live on "Дюна: Часть вторая" - two entries, "24 fps"
+    and "48 fps", `duration.total` = their sum = ~5h33m for a ~2h47m movie).
+    Summing alternate cuts is meaningless, so the frontend never uses this
+    field for a movie - it takes the first entry's own duration instead
+    (`duration_average`, KinoPub's `duration.average`, is exposed alongside
+    for the same reason: only meaningful when the entries are actually
+    episodes of one series, not different renders of the same one).
+    """
     duration = _plain_number(_nested_get(raw, 'duration.total')) or _plain_number(_pick_first(raw, ['duration', 'length']))
+    duration_average = _plain_number(_nested_get(raw, 'duration.average'))
     subtitle_langs: List[str] = []
     audio_langs: List[str] = []
     for entry in media:
@@ -1673,6 +1687,7 @@ def _item_details(raw: Dict[str, Any], media: List[Dict[str, Any]]) -> Dict[str,
         'director': ', '.join(_name_list(raw.get('director') or raw.get('directors'))),
         'cast': _name_list(raw.get('cast') or raw.get('actors')),
         'duration': int(duration) if duration else 0,
+        'duration_average': int(duration_average) if duration_average else 0,
         'quality': str(_pick_first(raw, ['quality', 'max_quality'], '') or ''),
         'votes': _vote_counts(raw),
         'imdb_votes': int(_plain_number(_pick_first(raw, ['imdb_votes', 'imdb_vote', 'votes_imdb'])) or 0),
