@@ -10,6 +10,7 @@ import socket
 import sqlite3
 import ssl
 import time
+from collections import OrderedDict
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, Dict, Optional, List
@@ -72,6 +73,12 @@ profile_cache: Dict[str, Dict[str, Any]] = {}
 # back-and-forth sidebar navigation or more than one open tab/session.
 CATALOG_LIST_CACHE_TTL = 60
 catalog_list_cache: Dict[str, Dict[str, Any]] = {}
+PAGE_COUNT_TTL = 6 * 60 * 60
+# Genres and countries are reference tables - KinoPub's own values have not
+# moved in the lifetime of this project. They were being re-fetched upstream
+# every single time the filter panel opened in a fresh tab, which is a real
+# round-trip for a list that could be a day old and still correct.
+REFERENCE_TTL = 12 * 60 * 60
 audio_hls_jobs: Dict[str, Dict[str, Any]] = {}
 audio_hls_job_keys: Dict[str, str] = {}
 
@@ -98,8 +105,34 @@ def db_init() -> None:
             updated_at REAL NOT NULL
         )''')
         conn.execute('DELETE FROM sessions WHERE updated_at < ?', (time.time() - 60 * 60 * 24 * 45,))
+        # Generic expiring key/value store. Exists so caches that are
+        # expensive to rebuild survive a container restart - page counts cost
+        # a real upstream probe per catalogue section, and the prewarm task
+        # re-ran all twelve of them on every `docker compose up -d --build`
+        # because the dict holding them lived only in memory.
+        conn.execute("CREATE TABLE IF NOT EXISTS kv_cache (key TEXT PRIMARY KEY, payload TEXT NOT NULL, expires_at REAL NOT NULL)")
+        conn.execute('DELETE FROM kv_cache WHERE expires_at < ?', (time.time(),))
         conn.execute("CREATE TABLE IF NOT EXISTS user_settings (profile TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at REAL NOT NULL)")
         conn.execute("CREATE TABLE IF NOT EXISTS watch_progress (media_id TEXT NOT NULL, episode_id TEXT NOT NULL DEFAULT '', position REAL NOT NULL, duration REAL NOT NULL, completed INTEGER NOT NULL DEFAULT 0, updated_at REAL NOT NULL, PRIMARY KEY(media_id, episode_id))")
+
+
+def kv_get(key: str) -> Optional[Any]:
+    """Read a still-valid entry from the persistent cache, else ``None``."""
+    with db_connect() as conn:
+        row = conn.execute('SELECT payload, expires_at FROM kv_cache WHERE key = ?', (key,)).fetchone()
+    if not row or row['expires_at'] <= time.time():
+        return None
+    try:
+        return json.loads(row['payload'])
+    except ValueError:
+        return None
+
+
+def kv_set(key: str, value: Any, ttl: float) -> None:
+    with db_connect() as conn:
+        conn.execute('INSERT INTO kv_cache(key, payload, expires_at) VALUES (?, ?, ?) '
+                     'ON CONFLICT(key) DO UPDATE SET payload=excluded.payload, expires_at=excluded.expires_at',
+                     (key, json.dumps(value), time.time() + ttl))
 
 
 def session_get(sid: Optional[str]) -> Dict[str, Any]:
@@ -1122,6 +1155,14 @@ async def _discover_page_count(session: Dict[str, Any], section: str, feed: str,
     cached = page_count_cache.get(key)
     if cached and not refresh and cached.get('expires_at', 0) > time.time():
         return {k: v for k, v in cached.items() if k != 'expires_at'}
+    # Second chance before probing upstream: a previous container already
+    # worked this out and it is still inside the 6h window. Without this the
+    # prewarm task re-probed all twelve sections on every restart.
+    if not refresh:
+        stored = kv_get('page_count:' + key)
+        if stored:
+            page_count_cache[key] = {**stored, 'expires_at': time.time() + PAGE_COUNT_TTL}
+            return stored
 
     probe_cache: Dict[int, Dict[str, Any]] = {}
     probes = 0
@@ -1201,7 +1242,8 @@ async def _discover_page_count(session: Dict[str, Any], section: str, feed: str,
             'exact': boundary_found, 'probes': probes,
         }
 
-    page_count_cache[key] = {**result, 'expires_at': time.time() + 6 * 60 * 60}
+    page_count_cache[key] = {**result, 'expires_at': time.time() + PAGE_COUNT_TTL}
+    kv_set('page_count:' + key, result, PAGE_COUNT_TTL)
     log_event('catalog', 'Catalogue page count discovered', result)
     return result
 
@@ -1590,20 +1632,31 @@ async def catalog_tv(kp_session: Optional[str] = Cookie(default=None)) -> Dict[s
 async def catalog_genres(content_type: str = 'movie', kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
     """Real genre reference list (`v1/genres?type=`) for the filter panel -
     replaces the old empty stub `<select>` that had no options at all."""
+    cache_key = 'genres:' + (content_type or 'all')
+    cached = kv_get(cache_key)
+    if cached is not None:
+        return {'genres': cached}
     session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, 'v1/genres', {'type': content_type} if content_type else {})
     raw_items = payload.get('items') if isinstance(payload, dict) else None
     genres = [{'id': r.get('id'), 'title': str(r.get('title') or '')} for r in (raw_items or []) if isinstance(r, dict) and r.get('id') is not None]
+    if genres:
+        kv_set(cache_key, genres, REFERENCE_TTL)
     return {'genres': genres}
 
 
 @app.get('/catalog/countries')
 async def catalog_countries(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
     """Real country reference list (`v1/countries`) for the filter panel."""
+    cached = kv_get('countries')
+    if cached is not None:
+        return {'countries': cached}
     session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, 'v1/countries', {})
     raw_items = payload.get('items') if isinstance(payload, dict) else (payload if isinstance(payload, list) else None)
     countries = [{'id': r.get('id'), 'title': str(r.get('title') or '')} for r in (raw_items or []) if isinstance(r, dict) and r.get('id') is not None]
+    if countries:
+        kv_set('countries', countries, REFERENCE_TTL)
     return {'countries': countries}
 
 
@@ -2879,6 +2932,38 @@ def rewrite_hls(text: str, playlist_url: str) -> str:
 
 
 
+# Decoded-and-re-encoded posters, keyed by exactly what decides the bytes.
+# Every grid render asked for ~48 of these and each one was a fresh fetch from
+# staticpop plus a full LANCZOS resize and progressive JPEG encode - ~70ms of
+# work per poster, repeated on every page load. The results are immutable
+# (the source URLs are content-addressed), so they are worth holding on to.
+# Bounded by total bytes rather than entry count: a backdrop is ~20x a poster.
+IMAGE_CACHE_MAX_BYTES = 96 * 1024 * 1024
+image_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+image_cache_bytes = 0
+
+
+def _image_cache_get(key: str) -> Optional[Dict[str, Any]]:
+    entry = image_cache.get(key)
+    if entry is not None:
+        image_cache.move_to_end(key)
+    return entry
+
+
+def _image_cache_put(key: str, content: bytes, media_type: str, etag: str) -> None:
+    global image_cache_bytes
+    if len(content) > IMAGE_CACHE_MAX_BYTES // 4:
+        return
+    existing = image_cache.pop(key, None)
+    if existing:
+        image_cache_bytes -= len(existing['content'])
+    image_cache[key] = {'content': content, 'media_type': media_type, 'etag': etag}
+    image_cache_bytes += len(content)
+    while image_cache_bytes > IMAGE_CACHE_MAX_BYTES and image_cache:
+        _, evicted = image_cache.popitem(last=False)
+        image_cache_bytes -= len(evicted['content'])
+
+
 @app.get('/image')
 async def image_proxy(
     url: str,
@@ -2901,6 +2986,17 @@ async def image_proxy(
     width = max(0, min(int(width or 0), 1920))
     height = max(0, min(int(height or 0), 1080))
     quality = max(55, min(int(quality or 82), 92))
+    # The `v=` cache-buster the frontend appends is deliberately not part of
+    # this key: it exists to make *browsers* refetch, and honouring it here
+    # would mean re-downloading and re-encoding an identical image.
+    cache_key = f'{url}|{fallback}|{width}|{height}|{quality}'
+    cached = _image_cache_get(cache_key)
+    if cached is not None:
+        if request.headers.get('if-none-match') == cached['etag']:
+            return Response(status_code=304, headers={
+                'ETag': cached['etag'], 'Cache-Control': 'public, max-age=2592000, immutable'})
+        return Response(cached['content'], media_type=cached['media_type'], headers={
+            'ETag': cached['etag'], 'Cache-Control': 'public, max-age=2592000, immutable'})
     headers = {
         'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
         'User-Agent': request.headers.get('user-agent', 'Mozilla/5.0'),
@@ -2958,8 +3054,11 @@ async def image_proxy(
         except Exception as exc:
             log_event('image', 'Image optimization skipped', {'error': str(exc)[:180]})
 
+    etag = '"' + hashlib.sha1(content).hexdigest() + '"'
+    _image_cache_put(cache_key, content, output_type, etag)
     response_headers = {
         'Cache-Control': 'public, max-age=2592000, immutable',
+        'ETag': etag,
     }
     log_event('image', 'Image proxied', {
         'host': urlparse(safe_url).hostname,
@@ -2968,6 +3067,8 @@ async def image_proxy(
         'height': height,
         'quality': quality,
     })
+    if request.headers.get('if-none-match') == etag:
+        return Response(status_code=304, headers=response_headers)
     return Response(content, media_type=output_type, headers=response_headers)
 
 
@@ -3580,20 +3681,6 @@ def receive_debug(event: DebugEvent) -> Dict[str, str]:
 def get_debug_events() -> Dict[str, Any]:
     return {'events': list(reversed(debug_events))}
 
-
-MOCK_ITEMS: List[Dict[str, Any]] = [
-    {'id':'m1','type':'movie','title':'Дюна: Часть вторая','original_title':'Dune: Part Two','year':2024,'rating':8.6,'duration':9960,'genres':['фантастика','драма'],'poster':'linear-gradient(145deg,#8a5b34,#1a130f)','backdrop':'linear-gradient(110deg,#16110d,#8a5b34 75%,#24160d)','description':'Продолжение истории Пола Атрейдеса. Демонстрационная карточка для проверки TV-интерфейса.','streams':[]},
-    {'id':'m2','type':'movie','title':'Оппенгеймер','original_title':'Oppenheimer','year':2023,'rating':8.4,'duration':10800,'genres':['драма','история'],'poster':'linear-gradient(145deg,#703425,#160f0d)','backdrop':'linear-gradient(110deg,#0e0d0c,#703425 75%,#1b0d08)','description':'Большая карточка фильма, история просмотра, настройки потока и управление с пульта.','streams':[]},
-    {'id':'s1','type':'series','title':'Сёгун','original_title':'Shōgun','year':2024,'rating':8.8,'genres':['драма','история'],'poster':'linear-gradient(145deg,#314f43,#0c1512)','backdrop':'linear-gradient(110deg,#09100d,#315949 75%,#112019)','description':'Сериал с сезонами и сериями. Список подготовлен без привязки к реальному API.','seasons':[{'number':1,'episodes':[{'id':'s1e1','number':1,'title':'Андзин','duration':4200},{'id':'s1e2','number':2,'title':'Слуги двух господ','duration':3900},{'id':'s1e3','number':3,'title':'Завтра наступит завтра','duration':4050}]}],'streams':[]},
-    {'id':'m3','type':'movie','title':'Бегущий по лезвию 2049','original_title':'Blade Runner 2049','year':2017,'rating':8.2,'duration':9840,'genres':['фантастика','триллер'],'poster':'linear-gradient(145deg,#8b4d2c,#141217)','backdrop':'linear-gradient(110deg,#0d0b0f,#8b4d2c 70%,#261410)','description':'Контрастный макет для проверки постеров, фокуса и производительности старого webOS.','streams':[]},
-    {'id':'s2','type':'series','title':'Разделение','original_title':'Severance','year':2022,'rating':8.7,'genres':['триллер','фантастика'],'poster':'linear-gradient(145deg,#31506f,#0d1319)','backdrop':'linear-gradient(110deg,#091018,#31506f 70%,#101b27)','description':'Демонстрация экранов сериала, продолжения просмотра и перехода к следующей серии.','seasons':[{'number':1,'episodes':[{'id':'s2e1','number':1,'title':'Добрые вести об аде','duration':3420},{'id':'s2e2','number':2,'title':'Половина петли','duration':3300}]}],'streams':[]}
-]
-
-@app.get('/mock/search')
-def mock_search(q: str = '') -> Dict[str, Any]:
-    needle=q.strip().lower()
-    items=[x for x in MOCK_ITEMS if not needle or needle in x['title'].lower() or needle in x.get('original_title','').lower()]
-    return {'items':items}
 
 @app.get('/settings')
 def get_settings() -> Dict[str, Any]:

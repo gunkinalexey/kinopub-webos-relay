@@ -1,5 +1,5 @@
 (function(){'use strict';
-var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:Date.now(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,watchingView:'new',watchingItems:null,watchingAllItems:null,similarToken:0,serverFfmpeg:null,bookmarkFolders:null,bookmarkFolder:null,collectionSort:'new',collectionId:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,serverOptions:[],serverSelected:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
+var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:imageCacheVersion(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,watchingView:'new',watchingItems:null,watchingAllItems:null,similarToken:0,serverFfmpeg:null,bookmarkFolders:null,bookmarkFolder:null,collectionSort:'new',collectionId:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,serverOptions:[],serverSelected:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
 var $=function(id){return document.getElementById(id);},video=$('video');
 // Every backend call that needs a session (catalog, history, profile, item
 // details...) raises a real HTTP 401 the moment the cookie is gone or
@@ -9,6 +9,15 @@ var $=function(id){return document.getElementById(id);},video=$('video');
 // user sees on first launch instead of leaving a raw error string on screen.
 function wrapAuthCheck(name){var orig=KPApi[name];if(typeof orig!=='function')return;KPApi[name]=function(){var result=orig.apply(KPApi,arguments);if(result&&typeof result.catch==='function')result=result.catch(function(err){if(err&&err.status===401)handleSessionExpired();throw err;});return result;};}
 (function(){var names=Object.keys(KPApi);for(var i=0;i<names.length;i++)wrapAuthCheck(names[i]);})();
+
+// Appended to every /image URL as `v=`. It used to be `Date.now()` evaluated
+// in the state literal, i.e. a brand-new value on **every page load** - so the
+// proxy's `Cache-Control: immutable, max-age=30d` never survived a reload and
+// each visit re-downloaded and re-encoded all ~48 posters of a grid. Kept in
+// localStorage instead so it stays put, and moves only when "Сбросить кэш"
+// deliberately moves it.
+function imageCacheVersion(){try{var v=localStorage.getItem('kp_image_version');if(v)return v;}catch(e){}var fresh=String(Date.now());try{localStorage.setItem('kp_image_version',fresh);}catch(e){}return fresh;}
+function bumpImageCacheVersion(){var fresh=String(Date.now());try{localStorage.setItem('kp_image_version',fresh);}catch(e){}return fresh;}
 
 var dogBrandIcons=['assets/dog/dog-icon-1.png','assets/dog/dog-icon-2.png','assets/dog/dog-icon-3.png'];
 var dogBrandIndex=-1,brandingRotationTimer=null;
@@ -1980,7 +1989,7 @@ function clearApplicationCache(){
  state.catalogPages={};
  state.catalogTotals={};
  state.catalogRequest++;
- state.cacheVersion=Date.now();
+ state.cacheVersion=bumpImageCacheVersion();
  try{sessionStorage.clear();}catch(e){}
  try{localStorage.removeItem('kp_catalog_cache');}catch(e){}
  $('settingsStatus').textContent='Кэш каталога и обложек сброшен';

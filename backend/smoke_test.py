@@ -137,8 +137,12 @@ with TestClient(app, raise_server_exceptions=False) as client:
     r = client.post('/debug/events', json={'message': 'smoke'})
     check('POST /debug/events', r.status_code == 200, f'HTTP {r.status_code} {r.text[:120]}')
 
+    # /mock/search and its five hardcoded titles are gone on purpose: the
+    # frontend used to fall back to them whenever the real search failed, so
+    # an auth or network problem quietly produced five unplayable fake films
+    # that looked like results. A failed search now surfaces the failure.
     r = client.get('/mock/search?q=')
-    check('GET /mock/search', r.status_code == 200, f'HTTP {r.status_code} {r.text[:120]}')
+    check('GET /mock/search is gone', r.status_code == 404, f'HTTP {r.status_code} {r.text[:120]}')
 
     # "Актёры"/"Режиссёры" search modes silently ran the same all-fields
     # query as "Все" until this fix - v1/items/search's real `field` param
