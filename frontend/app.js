@@ -17,7 +17,7 @@ var dogBrandIndex=-1,brandingRotationTimer=null;
 // them for us. Falls back to the bundled three above if the listing fails
 // (older nginx config, offline dev server, etc).
 function loadDogBrandIcons(){fetch('assets/dog/').then(function(r){return r.ok?r.json():null;}).then(function(list){if(!Array.isArray(list))return;var files=list.filter(function(e){return e.type==='file'&&/\.(png|jpe?g|gif|webp)$/i.test(e.name||'');}).map(function(e){return 'assets/dog/'+e.name;}).sort();if(files.length){dogBrandIcons=files;updateDogPreviewStack();}}).catch(function(){});}
-function updateDogPreviewStack(){var stack=document.querySelector('.app-icon-preview-stack');if(!stack)return;var imgs=stack.querySelectorAll('img');for(var i=0;i<imgs.length;i++)imgs[i].src=dogBrandIcons[i%dogBrandIcons.length];}
+function updateDogPreviewStack(){var img=$('appIconPreviewDog');if(img&&dogBrandIcons[0])img.src=dogBrandIcons[0];}
 loadDogBrandIcons();
 function normalizeAppIcon(value){return value==='kinopub'?'kinopub':'kinoterk';}
 function selectedAppIcon(){var nodes=document.querySelectorAll('input[name="appIcon"]');for(var i=0;i<nodes.length;i++)if(nodes[i].checked)return normalizeAppIcon(nodes[i].value);return 'kinopub';}
