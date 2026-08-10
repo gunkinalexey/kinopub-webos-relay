@@ -1377,6 +1377,11 @@ function openDetails(item){
  state.current=item;state.detailsTab='plot';state.detailsSeason=0;
  var from=visibleScreen();if(from!=='detailsScreen'){state.detailsReturn=from;state.detailsFocus=document.activeElement;}
  showScreen('detailsScreen');
+ // Details screen DOM is reused between items (only its innerHTML changes),
+ // so without this a scroll position left over from browsing a previous,
+ // longer details page carries straight into the next one - the backdrop
+ // and "← Назад" render mid-scroll instead of at the top.
+ var ds=$('detailsScreen');if(ds)ds.scrollTop=0;
  $('detailsTitle').textContent=item.title||'Загрузка…';
  $('detailsOriginal').textContent='';
  $('detailsTabs').innerHTML='';$('detailsInfo').innerHTML='';$('detailsEpisodes').innerHTML='';
