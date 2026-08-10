@@ -65,7 +65,7 @@ docker run --rm -v "$PWD/frontend:/f:ro" -w /tmp node:20-alpine sh -c '
   done'
 ```
 
-As of the last run: **262 checks, 0 failures** across all eight files.
+As of the last run: **269 checks, 0 failures** across all eight files.
 
 ## What each file covers
 
@@ -75,7 +75,7 @@ As of the last run: **262 checks, 0 failures** across all eight files.
 | `subs.js` | Subtitle mount/rebuild loop fix, per-track `shift`, language auto-selection, embedded-track menu listing |
 | `misc.js` | Remote OK-key-on-timeline fix (no false seek-to-0), shared label-building helpers (`pushLabelPart`/`truthyFlag`), `play()` promise rejection handling (AbortError silencing, NotAllowedError messaging) |
 | `quality.js` | Device-capability probing (HEVC/HDR/MSE) including the three-way "browser did not answer" case and the multi-spelling codec probe, what gets declared to KinoPub, the explicit device profile, quality-variant selection and ranking, stream-mode fallback on Direct-playback failure, fullscreen mode selection |
-| `sections.js` | 3D as its own catalogue section, Фильмы/3D heading toggle, History section (day grouping, type filter, per-filter paging), "Я смотрю" sidebar badge on startup, real catalogue filters (genre/country/year/quality/sort, per-section state, reset), "Закладки" (folder list, folder contents, back navigation, resets when you leave and come back), the kino.pub-style filter panel: two-handle range sliders driven from a remote (OK enters edit mode, OK swaps handle, arrows move, Back exits), debounced commit, focus surviving the panel rebuild |
+| `sections.js` | 3D as its own catalogue section, Фильмы/3D heading toggle, History section (day grouping, type filter, per-filter paging), "Я смотрю" sidebar badge on startup, its Новые эпизоды/Мои сериалы toggle (two different endpoints, not two slices of one), real catalogue filters (genre/country/year/quality/sort, per-section state, reset), "Закладки" (folder list, folder contents, back navigation, resets when you leave and come back), the kino.pub-style filter panel: two-handle range sliders driven from a remote (OK enters edit mode, OK swaps handle, arrows move, Back exits), debounced commit, focus surviving the panel rebuild |
 | `actions.js` | Details-screen Watch/Continue/Restart buttons, resumable-position heuristics, that a fresh title doesn't inherit the previous title's resume position |
 | `episodes.js` | Season-picker/episode-strip visibility rules: hidden for a single-file movie, flat strip (no season pills) for one season with multiple episodes, season pills only for genuinely multiple seasons. Also the "Серии:" episode-pill row — its own class rather than `.season-pill`, rebuilt per season, watched filled vs part-watched outlined |
 | `panel.js` | Full details-screen render: title/rating/vote/tab/info-table structure, season-switching replaces (not appends) the episode strip, screen-not-overlay navigation (Back returns to wherever it was opened from) |

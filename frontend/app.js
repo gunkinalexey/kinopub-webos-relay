@@ -1,5 +1,5 @@
 (function(){'use strict';
-var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:Date.now(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,watchingView:'new',watchingItems:null,bookmarkFolders:null,bookmarkFolder:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
+var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:Date.now(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,watchingView:'new',watchingItems:null,watchingAllItems:null,bookmarkFolders:null,bookmarkFolder:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
 var $=function(id){return document.getElementById(id);},video=$('video');
 // Every backend call that needs a session (catalog, history, profile, item
 // details...) raises a real HTTP 401 the moment the cookie is gone or
@@ -579,49 +579,52 @@ function watchingNewCount(items){
 // fetch still runs when the section is opened (cheap, and keeps the number
 // fresh rather than trusting a load that might be minutes old).
 function loadWatchingCount(){return KPApi.watchingList().then(function(data){updateWatchingCount(watchingNewCount((data&&data.items)||[]));}).catch(function(){});}
-// Two views over one list, the way kino.pub's own page does it: "Новые
-// эпизоды" (only the serials with something unwatched waiting) and "Мои
-// сериалы" (everything marked "Буду смотреть"). Both come from the single
-// `v1/watching/serials?subscribed=1` payload already being fetched - the
-// documented meaning of `subscribed=1` is exactly "сериалы отмеченные «Буду
-// смотреть»", so the second view is that payload and the first is it filtered
-// by `watching_new > 0`. No second endpoint, nothing guessed: the sweep for
-// one (`new=0`, `all=1`, `watched=1`, `/v1/watching/subscribed`,
-// `v1/items?subscribed=1`) came back either identical or 404.
+// Two views, the way kino.pub's own page has them: "Новые эпизоды" (serials
+// with something waiting) and "Мои сериалы" (everything marked "Буду
+// смотреть", finished ones included).
+//
+// They are NOT two slices of one payload, which is what this first shipped as
+// and it was wrong - the user had four subscriptions and the page showed two.
+// `v1/watching/serials` is, per KinoPub's own doc index, "Список сериалов с
+// новыми/не досмотренными сериями"; `subscribed=1` narrows within that, so a
+// subscribed serial you have finished falls out of it entirely. The full list
+// needs the history-backed assembly in `/catalog/watching/subscribed` - see
+// that endpoint for why it is complete and what it cost to establish.
 function watchingViewIsAll(){return state.watchingView==='all';}
+function watchingCacheFor(view){return view==='all'?state.watchingAllItems:state.watchingItems;}
 function renderWatchingHead(items,loading){
  var root=$('catalogTop');root.innerHTML='';
- var all=items||[],fresh=all.filter(function(i){return (Number(i.watching_new)||0)>0;});
- var showingAll=watchingViewIsAll(),shown=showingAll?all:fresh;
+ var showingAll=watchingViewIsAll();
  var head=document.createElement('div');head.className='catalog-title-row';
  head.innerHTML='<h3>'+(showingAll?'Мои сериалы':'Новые эпизоды')+
-  (loading?'':' <span class="title-count">'+shown.length+'</span>')+'</h3>'+
-  (loading?'':'<button id="watchingViewToggle" class="focusable filter-toggle">'+
-   (showingAll?'Новые эпизоды':'Все мои сериалы')+'</button>');
+  (loading?'':' <span class="title-count">'+(items||[]).length+'</span>')+'</h3>'+
+  '<button id="watchingViewToggle" class="focusable filter-toggle">'+
+   (showingAll?'Новые эпизоды':'Все мои сериалы')+'</button>';
  root.appendChild(head);
  var toggle=$('watchingViewToggle');
  if(toggle)toggle.onclick=function(){state.watchingView=showingAll?'new':'all';renderWatching(routes[state.route]||routes.watching);};
- return shown;
 }
 function renderWatching(cfg){
- var g=$('catalogGrid');
+ var g=$('catalogGrid'),view=watchingViewIsAll()?'all':'new';
  g.className='poster-grid';$('catalogPagination').classList.add('hidden');
- // Serve the list we already have while refetching, so flipping the view is
- // instant instead of blanking the grid for a round-trip.
- var cached=state.watchingItems;
- if(cached){renderCatalogItems(renderWatchingHead(cached,false));}
- else{renderWatchingHead(null,true);g.innerHTML='<p class="empty-state">Загружаем…</p>';}
+ // Serve the list we already have while refetching, so flipping back to a
+ // view you have already seen is instant instead of blanking the grid. The
+ // full list is the expensive one (it walks history pages), so this matters
+ // most there.
+ var cached=watchingCacheFor(view);
+ if(cached){renderWatchingHead(cached,false);renderCatalogItems(cached);}
+ else{renderWatchingHead(null,true);g.innerHTML='<p class="empty-state">'+(view==='all'?'Собираем список подписок…':'Загружаем…')+'</p>';}
  var requestId=++state.catalogRequest;
- KPApi.watchingList().then(function(data){
+ (view==='all'?KPApi.subscribedSerials():KPApi.watchingList()).then(function(data){
   if(requestId!==state.catalogRequest)return;
   var items=(data&&data.items)||[];
-  state.watchingItems=items;
-  renderCatalogItems(renderWatchingHead(items,false));
-  updateWatchingCount(watchingNewCount(items));
+  if(view==='all')state.watchingAllItems=items;else{state.watchingItems=items;updateWatchingCount(watchingNewCount(items));}
+  renderWatchingHead(items,false);
+  renderCatalogItems(items);
  }).catch(function(err){
   if(requestId!==state.catalogRequest)return;
   g.innerHTML='<p class="empty-state">Не удалось загрузить раздел: '+esc(err&&err.message?err.message:String(err))+'</p>';
-  KPApi.report('Watching list failed',{error:String(err)},'catalog').catch(function(){});
+  KPApi.report('Watching list failed',{view:view,error:String(err)},'catalog').catch(function(){});
  });
 }
 // "Спорт" - real live TV channels (v1/tv), not a VOD genre filter: this

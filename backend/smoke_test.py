@@ -97,6 +97,9 @@ with TestClient(app, raise_server_exceptions=False) as client:
           sorted(params))
     check('/catalog/list still takes the year range', {'year_from', 'year_to'} <= params, sorted(params))
 
+    check('/catalog/watching/subscribed is wired',
+          '/catalog/watching/subscribed' in schema['paths'], sorted(schema['paths'])[:12])
+
     r = client.get('/history')
     check('GET /history (local progress)', r.status_code == 200, f'HTTP {r.status_code} {r.text[:120]}')
 

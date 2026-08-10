@@ -69,7 +69,7 @@ read-only — **frontend changes are live immediately, no rebuild**.
 
 Backend version string lives at `app = FastAPI(..., version='0.9.NN', ...)`
 in `main.py` near the top; bump it whenever `backend/` changes so `/health`
-reflects what's actually deployed. **Currently: backend 0.9.90.**
+reflects what's actually deployed. **Currently: backend 0.9.91.**
 
 The real upstream API is `https://api.service-kp.com` (`API_BASE`). Docs at
 kinoapi.com are patchy and the domain is **intermittently unreachable via
@@ -86,13 +86,13 @@ inside the backend container instead (see "Verifying live" below).
 ## Current state
 
 - Branch: `rework/audio-subtitles-details` (not merged to `main`)
-- Backend running version: **0.9.90**, containers up via `docker compose up -d`
+- Backend running version: **0.9.91**, containers up via `docker compose up -d`
 - `curl http://localhost:8080/bridge/health` to check it's alive
 - Working tree has uncommitted changes at handoff time — the auto-commit
   hook (see below) picks them up at the end of the current turn if this
   handoff is being read mid-session; if you're starting fresh, they're
   probably already committed.
-- **262 frontend checks + 24 backend smoke checks, all green** (see Testing
+- **269 frontend checks + 25 backend smoke checks, all green** (see Testing
   below)
 
 ## How work has been happening (read this before doing anything)
@@ -166,8 +166,20 @@ an honest smaller filter panel than a bigger one with dead switches.
 
 ## Everything fixed/built, most recent first (README.md has full prose, this is the map)
 
-Backend 0.9.79 → 0.9.90 this stretch, frontend tests 159 → 262:
+Backend 0.9.79 → 0.9.91 this stretch, frontend tests 159 → 269:
 
+19. **"Мои сериалы" showed 2 of 4** — and the cause was a wrong inference in
+    item #18, not a coding slip. `v1/watching/serials?subscribed=1` is not the
+    watchlist: the *endpoint* is titled "Список сериалов с новыми/не
+    досмотренными сериями" in KinoPub's own doc index, and `subscribed` only
+    narrows within that, so a finished subscription is absent entirely. No
+    list endpoint exists (six paths tried, all 404; every widening param
+    ignored). What does exist: **`v1/history` entries embed the whole item
+    including `subscribed`/`in_watchlist`**, so `GET /catalog/watching/
+    subscribed` assembles `subscribed=1` ∪ history-flagged serials, which is
+    complete by construction. Reports `scanned_pages`/`history_exhausted`
+    rather than hiding its scan depth. Lesson worth keeping: a parameter's
+    documented meaning does not tell you the endpoint's domain.
 18. **Four TV-reported UI fixes** (frontend only, no backend change):
     navigation no longer drags the focus ring to the first sidebar button
     (`route()` ended in `focusFirst()`, and the first `.focusable` in

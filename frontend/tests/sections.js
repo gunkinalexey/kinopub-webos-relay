@@ -54,6 +54,13 @@ global.KPApi = {
   // badge counts episodes, not shows, so these two numbers must not be
   // interchangeable in the fixture or the test proves nothing.
   watchingList:()=>Promise.resolve({items:[{id:'w1',watching_new:2},{id:'w2',watching_new:0},{id:'w3',watching_new:3}]}),
+  // The full watchlist is a different endpoint, not a slice of the one
+  // above: a subscribed serial you have finished drops out of
+  // v1/watching/serials entirely, so it can only come from the
+  // history-backed assembly. Two extra finished shows here.
+  subscribedSerials:()=>{ calls.push(['subscribedSerials']);
+    return Promise.resolve({items:[{id:'w1',watching_new:2},{id:'w2',watching_new:0},{id:'w3',watching_new:3},
+                                   {id:'w4',watching_new:0},{id:'w5',watching_new:0}],history_exhausted:true}); },
   bookmarkFolders:()=>Promise.resolve({folders:FOLDERS}),
   bookmarkFolder:(id,page)=>{ calls.push(['bookmarkFolder',id,page]);
     return Promise.resolve({folder:{id,title:'йоу'},items:FOLDER_ITEMS,page:page||0,total_pages:1,total_items:5,has_next:false,perpage:48}); },
@@ -170,6 +177,25 @@ const bubbles = name => {
   // button, the first element in index.html. Cosmetic with a mouse, broken
   // with a remote: the ring is not where focus actually is, so the next Down
   // press moves from the wrong place.
+  console.log('--- "Я смотрю": Новые эпизоды vs Все мои сериалы ---');
+  calls.length = 0;
+  app.route('watching'); await settleRange();
+  const headText = () => document.querySelector('#catalogTop h3').textContent.replace(/\s+/g, ' ').trim();
+  check('opens on the new-episodes view', headText(), 'Новые эпизоды 3');
+  check('and asked the watching endpoint, not the watchlist one',
+    calls.filter(c => c[0] === 'subscribedSerials').length, 0);
+  const toggle = document.getElementById('watchingViewToggle');
+  check('the kino.pub toggle is offered', toggle.textContent, 'Все мои сериалы');
+  click(toggle); await settleRange();
+  // Five, not three: the two finished subscriptions exist only in the
+  // history-backed list. Shipping this as a filter over the watching payload
+  // showed 2 of the user's 4 real subscriptions.
+  check('the full list comes from its own endpoint', headText(), 'Мои сериалы 5');
+  check('which was actually called', calls.filter(c => c[0] === 'subscribedSerials').length, 1);
+  check('and the button offers the way back', document.getElementById('watchingViewToggle').textContent, 'Новые эпизоды');
+  click(document.getElementById('watchingViewToggle')); await settleRange();
+  check('back to new episodes', headText(), 'Новые эпизоды 3');
+
   console.log('--- navigating must not drag the focus ring to the first sidebar button ---');
   const sideLink = t => qa('.side-link').find(b => b.textContent.trim() === t);
   sideLink('ТВ Шоу').focus();

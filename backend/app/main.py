@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.90', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.91', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -1287,6 +1287,116 @@ async def catalog_watching(kp_session: Optional[str] = Cookie(default=None)) -> 
         items.append(item)
     log_event('catalog', 'Watching list loaded', {'count': len(items)})
     return {'items': items, 'total_items': len(items)}
+
+
+SERIAL_TYPES = {'serial', 'docuserial', 'tvshow'}
+# Deeper than HISTORY_SCAN_PAGES (20), which exists for the history *type
+# filter* where a partial scan just means a shorter list. Here a page not
+# scanned is a subscription silently missing, so this walks until the history
+# runs out; the cap is only a runaway guard. At 50 per page that is 15 000
+# entries - the account this was built against exhausts at 44 pages (~2 150
+# entries) in about 7 seconds, and the result is cached.
+SUBSCRIBED_SCAN_PAGES = 300
+SUBSCRIBED_CACHE_TTL = 300
+subscribed_cache: Dict[str, Dict[str, Any]] = {}
+
+
+@app.get('/catalog/watching/subscribed')
+async def catalog_watching_subscribed(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """Every serial marked "Буду смотреть", including the fully-watched ones.
+
+    `/catalog/watching` cannot answer this and no amount of parameters will
+    make it. `v1/watching/serials` is titled, in KinoPub's own docs, "Список
+    сериалов с новыми/не досмотренными сериями" - its domain is serials with
+    something left to watch, and `subscribed=1` only narrows *within* that.
+    Verified live against an account with four subscriptions: it returned two
+    (the two with unwatched episodes), and the other two were absent from the
+    unfiltered 28-entry list as well, because they are fully watched. A sweep
+    for a list endpoint (`v1/watchlist`, `v1/user/watchlist`,
+    `v1/watching/list`, `v1/watching/watchlist`, `v1/watching/serials/
+    subscribed`, `v1/bookmarks/watchlist`) returned 404 for every one, and
+    `subscribed`/`watchlist`/`finished` as `v1/items` params are ignored
+    outright.
+
+    What does exist: **every `v1/history` entry embeds the whole item, and
+    that item carries `subscribed`/`in_watchlist`** (verified live - Grey's
+    Anatomy and Rooster both came back `subscribed=True` from a history page,
+    with no per-item fetch). So the list is assembled as:
+
+        serials from `v1/watching/serials?subscribed=1`   (subscribed, unfinished)
+      ∪ serials in the watch history flagged `subscribed`  (subscribed, finished)
+
+    which is complete by construction: a subscribed serial either still has
+    something unwatched (first set) or has been watched, and being watched is
+    what puts it in the history (second set). The only real limit is scan
+    depth - `HISTORY_SCAN_PAGES` pages back - and that is reported honestly in
+    the response as `scanned_pages`/`history_exhausted` rather than hidden.
+    """
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    cache_key = hashlib.sha256((kp_session or '').encode('utf-8')).hexdigest()[:16]
+    cached = subscribed_cache.get(cache_key)
+    if cached and cached['at'] + SUBSCRIBED_CACHE_TTL > time.time():
+        return cached['result']
+
+    payload = await kino_get(session, 'v1/watching/serials', {'subscribed': 1})
+    items: List[Dict[str, Any]] = []
+    seen: set = set()
+    for raw in (payload.get('items') or []) if isinstance(payload, dict) else []:
+        if not isinstance(raw, dict):
+            continue
+        item = normalize_catalog_item(raw)
+        if not item['id'] or item['id'] in seen:
+            continue
+        item['subscribed'] = True
+        item['watching_total'] = int(_plain_number(raw.get('total')) or 0)
+        item['watching_watched'] = int(_plain_number(raw.get('watched')) or 0)
+        item['watching_new'] = int(_plain_number(raw.get('new')) or 0)
+        seen.add(item['id'])
+        items.append(item)
+
+    scanned_pages = 0
+    exhausted = False
+    for api_page in range(1, SUBSCRIBED_SCAN_PAGES + 1):
+        result = await _history_fetch(session, api_page, HISTORY_SCAN_PERPAGE)
+        entries = result['entries']
+        scanned_pages += 1
+        for entry in entries:
+            raw = entry.get('item') if isinstance(entry, dict) and isinstance(entry.get('item'), dict) else None
+            if not raw or not (raw.get('subscribed') or raw.get('in_watchlist')):
+                continue
+            if str(raw.get('type') or '') not in SERIAL_TYPES:
+                continue
+            item = _history_entry_item(entry)
+            if not item or item['id'] in seen:
+                continue
+            item['subscribed'] = True
+            # Nothing left unwatched - that is precisely why this one was not
+            # in the watching list. Stated rather than left absent so the UI
+            # does not have to guess what a missing count means.
+            item['watching_new'] = 0
+            # `_history_entry_item` describes *a viewing*, so it carries the
+            # episode that was watched (season/episode/frame/media title). On
+            # this screen the card is the serial, not the last episode of it -
+            # left in, half the grid captioned itself "S22E18 · Bridge Over
+            # Troubled Liquor" while the rest showed the show's own name.
+            for field in ('history_season', 'history_episode', 'media_title',
+                          'episode_thumbnail', 'watched_at'):
+                item.pop(field, None)
+            seen.add(item['id'])
+            items.append(item)
+        if len(entries) < HISTORY_SCAN_PERPAGE:
+            exhausted = True
+            break
+
+    log_event('catalog', 'Subscribed serials assembled', {
+        'count': len(items), 'scanned_pages': scanned_pages, 'history_exhausted': exhausted,
+    })
+    result = {
+        'items': items, 'total_items': len(items),
+        'scanned_pages': scanned_pages, 'history_exhausted': exhausted,
+    }
+    subscribed_cache[cache_key] = {'at': time.time(), 'result': result}
+    return result
 
 
 @app.get('/catalog/tv')
