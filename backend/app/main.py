@@ -37,6 +37,30 @@ AUDIO_HLS_TTL = max(600, int(os.getenv('AUDIO_HLS_TTL', str(60 * 60))))
 AUDIO_HLS_SEGMENT_SECONDS = max(2, min(10, int(os.getenv('AUDIO_HLS_SEGMENT_SECONDS', '4'))))
 AUDIO_HLS_START_BUCKET = max(1, min(30, int(os.getenv('AUDIO_HLS_START_BUCKET', '10'))))
 
+
+def _ffmpeg_available() -> bool:
+    """Whether this build can remux an audio track (`/audio-hls/jobs`).
+
+    Two conditions, both required. `WITH_FFMPEG=0` in .env is the deliberate
+    "build without it" switch (see backend/Dockerfile - the image genuinely
+    does not contain FFmpeg then, apt is not even contacted). And the binaries
+    are looked up regardless, because a flag that promises a program which is
+    not installed is worse than no flag: the request would reach
+    `create_subprocess_exec` and die with a FileNotFoundError the player has
+    no way to explain to the user.
+
+    Nothing else in this bridge depends on FFmpeg - catalogue, playback in all
+    three transports, subtitles, and the first three rungs of the audio ladder
+    (hls.js renditions, native MP4 tracks, an alternate HLS variant) are all
+    untouched by it.
+    """
+    if os.getenv('WITH_FFMPEG', '1').strip().lower() in {'0', 'false', 'no', 'off', ''}:
+        return False
+    return bool(shutil.which('ffmpeg') and shutil.which('ffprobe'))
+
+
+FFMPEG_AVAILABLE = _ffmpeg_available()
+
 pending_devices: Dict[str, Dict[str, Any]] = {}
 debug_events = []
 page_count_cache: Dict[str, Dict[str, Any]] = {}
@@ -127,7 +151,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.92', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.93', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -1901,7 +1925,13 @@ async def compare_catalog_feeds(feed: str = 'both', kp_session: Optional[str] = 
 
 @app.get('/health')
 def health() -> Dict[str, Any]:
-    return {'status': 'ok', 'version': app.version, 'credentials_configured': bool(CLIENT_ID and CLIENT_SECRET)}
+    return {
+        'status': 'ok', 'version': app.version,
+        'credentials_configured': bool(CLIENT_ID and CLIENT_SECRET),
+        # The player reads this to skip the FFmpeg rung of the audio ladder
+        # instead of offering a switch that will fail a second later.
+        'ffmpeg': FFMPEG_AVAILABLE,
+    }
 
 
 
@@ -2806,6 +2836,12 @@ async def audio_hls_cleanup_loop() -> None:
 
 @app.post('/audio-hls/jobs')
 async def create_audio_hls_job(payload: AudioHlsPayload, request: Request, kp_session: Optional[str] = Cookie(default=None)):
+    # The only endpoint in this bridge that genuinely needs FFmpeg. Refused up
+    # front with a message the player can show as-is, rather than letting the
+    # subprocess fail somewhere inside a background job.
+    if not FFMPEG_AVAILABLE:
+        raise HTTPException(503, 'Сборка без FFmpeg: пересобрать дорожку на сервере нельзя. '
+                                 'Доступны только дорожки, которые есть в самом потоке.')
     if payload.track < 0 or payload.track > 128:
         raise HTTPException(400, 'Invalid audio track index')
     sid = kp_session or ''

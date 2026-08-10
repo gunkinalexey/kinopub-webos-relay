@@ -8,6 +8,7 @@ so `-> Dict[str, bool]` on a handler returning a number turns every call into a
 Run:  docker compose exec -T backend python smoke_test.py
 """
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -101,6 +102,25 @@ with TestClient(app, raise_server_exceptions=False) as client:
           '/catalog/watching/subscribed' in schema['paths'], sorted(schema['paths'])[:12])
     check('/catalog/items/{item_id}/similar is wired',
           '/catalog/items/{item_id}/similar' in schema['paths'], sorted(schema['paths'])[:12])
+
+    # WITH_FFMPEG=0 builds an image with no ffmpeg at all, so the player has to
+    # be able to ask before offering the remux. And the flag alone must never
+    # be believed: claiming a binary that is not installed would turn a clear
+    # refusal into a FileNotFoundError inside a background job.
+    from app.main import _ffmpeg_available
+    check('/health reports whether FFmpeg is in this build',
+          isinstance(client.get('/health').json().get('ffmpeg'), bool),
+          client.get('/health').text[:160])
+    for value in ('0', 'false', 'no', 'off', ''):
+        os.environ['WITH_FFMPEG'] = value
+        if _ffmpeg_available():
+            check(f'WITH_FFMPEG={value!r} disables the remux', False, 'still reported available')
+            break
+    else:
+        check('every "off" spelling of WITH_FFMPEG disables the remux', True, '')
+    os.environ['WITH_FFMPEG'] = '1'
+    check('WITH_FFMPEG=1 still needs the binaries to actually be there',
+          _ffmpeg_available() == bool(shutil.which('ffmpeg') and shutil.which('ffprobe')), '')
 
     r = client.get('/history')
     check('GET /history (local progress)', r.status_code == 200, f'HTTP {r.status_code} {r.text[:120]}')

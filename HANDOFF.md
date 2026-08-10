@@ -69,7 +69,7 @@ read-only — **frontend changes are live immediately, no rebuild**.
 
 Backend version string lives at `app = FastAPI(..., version='0.9.NN', ...)`
 in `main.py` near the top; bump it whenever `backend/` changes so `/health`
-reflects what's actually deployed. **Currently: backend 0.9.92.**
+reflects what's actually deployed. **Currently: backend 0.9.93.**
 
 The real upstream API is `https://api.service-kp.com` (`API_BASE`). Docs at
 kinoapi.com are patchy and the domain is **intermittently unreachable via
@@ -86,13 +86,13 @@ inside the backend container instead (see "Verifying live" below).
 ## Current state
 
 - Branch: `rework/audio-subtitles-details` (not merged to `main`)
-- Backend running version: **0.9.92**, containers up via `docker compose up -d`
+- Backend running version: **0.9.93**, containers up via `docker compose up -d`
 - `curl http://localhost:8080/bridge/health` to check it's alive
 - Working tree has uncommitted changes at handoff time — the auto-commit
   hook (see below) picks them up at the end of the current turn if this
   handoff is being read mid-session; if you're starting fresh, they're
   probably already committed.
-- **276 frontend checks + 26 backend smoke checks, all green** (see Testing
+- **280 frontend checks + 29 backend smoke checks, all green** (see Testing
   below)
 
 ## How work has been happening (read this before doing anything)
@@ -166,8 +166,18 @@ an honest smaller filter panel than a bigger one with dead switches.
 
 ## Everything fixed/built, most recent first (README.md has full prose, this is the map)
 
-Backend 0.9.79 → 0.9.92 this stretch, frontend tests 159 → 276:
+Backend 0.9.79 → 0.9.93 this stretch, frontend tests 159 → 280:
 
+21. **FFmpeg is now optional at build time** - `WITH_FFMPEG=0` in `.env`
+    builds a backend image without it (900 MB -> 273 MB measured, and apt is
+    not contacted at all). This closes the "FFmpeg removability" open
+    question below. It only ever powered `/audio-hls/jobs` (the last rung of
+    the audio ladder); everything else is untouched. `_ffmpeg_available()`
+    requires both the flag *and* `shutil.which`, so a flag that lies cannot
+    turn into a FileNotFoundError inside a background job. `/health` reports
+    it, the player skips that rung locally instead of firing a doomed
+    request, and Diagnostics shows a row. Changing it needs
+    `docker compose up -d --build backend`, not a restart.
 20. **"Похожие" section on the details card** (`v1/items/similar?id=`, the
     endpoint the user supplied). Real endpoint - 400 without `id`, 404 for a
     bogus one - but **empty for roughly two thirds of the catalogue**
@@ -328,7 +338,7 @@ Backend 0.9.79 → 0.9.92 this stretch, frontend tests 159 → 276:
   `v1/watching` data; the Continue button's own resume position still only
   reads this bridge's local SQLite, never KinoPub's own cross-device
   position.
-- **FFmpeg removability still an open question.**
+- ~~FFmpeg removability still an open question.~~ **Resolved** - see item #21; `WITH_FFMPEG=0` in `.env` builds without it.
 - **`v1/collections`** (real curated collections/подборки, "Подборки"
   sidebar button still dead) — confirmed-real, unused endpoint. Not
   requested yet.

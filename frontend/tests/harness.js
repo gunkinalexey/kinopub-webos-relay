@@ -174,6 +174,30 @@ const done = () => new Promise(r => setTimeout(r, 30));
   app.populateAudioMenu();
   check('menu lists all API tracks + Auto', els.playerAudio.children.length, 3);
 
+  // 8. A backend built with WITH_FFMPEG=0 has no ffmpeg in the image at all,
+  //    so the last rung of the ladder must be refused here rather than sent
+  //    off to come back 503. The three rungs above it are untouched by this.
+  reset(AUDIOS, {});
+  st.serverFfmpeg = false;
+  calls.length = 0;
+  app.applyAudioChoice('track:1');
+  await done();
+  check('no remux is even requested without FFmpeg',
+    calls.filter(c => c[0] === 'ffmpeg').length, 0);
+  check('and the user is told why', /без FFmpeg/.test(els.playerError.textContent), true);
+  check('the previous track stays selected', st.playerAudioChoice, 'auto');
+
+  //    Unknown (health unreachable) must behave exactly as before, not
+  //    disable a feature that probably works.
+  reset(AUDIOS, {});
+  st.serverFfmpeg = null;
+  calls.length = 0;
+  app.applyAudioChoice('track:1');
+  await done();
+  check('an unknown backend still tries the remux',
+    calls.filter(c => c[0] === 'ffmpeg').length, 1);
+  st.serverFfmpeg = null;
+
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nAll checks passed');
   process.exit(failures ? 1 : 0);
 })();

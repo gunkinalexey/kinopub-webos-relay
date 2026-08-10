@@ -1,7 +1,15 @@
 services:
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        # WITH_FFMPEG=0 in .env builds an image without FFmpeg at all. Changing
+        # it needs a rebuild (`docker compose up -d --build backend`), not just
+        # a restart - it decides what goes into the image, not only what the
+        # app is told.
+        WITH_FFMPEG: ${WITH_FFMPEG:-1}
     environment:
+      WITH_FFMPEG: ${WITH_FFMPEG:-1}
       KINOPUB_CLIENT_ID: ${KINOPUB_CLIENT_ID:-}
       KINOPUB_CLIENT_SECRET: ${KINOPUB_CLIENT_SECRET:-}
       KINOPUB_API_BASE: ${KINOPUB_API_BASE:-https://api.service-kp.com}

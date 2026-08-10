@@ -65,13 +65,13 @@ docker run --rm -v "$PWD/frontend:/f:ro" -w /tmp node:20-alpine sh -c '
   done'
 ```
 
-As of the last run: **276 checks, 0 failures** across all eight files.
+As of the last run: **280 checks, 0 failures** across all eight files.
 
 ## What each file covers
 
 | File | Covers |
 |---|---|
-| `harness.js` | Audio-track switching ladder (hls.js alt-audio → native `audioTracks` → alternate HLS variant → FFmpeg remux), ordinal-vs-`index` track addressing |
+| `harness.js` | Audio-track switching ladder (hls.js alt-audio → native `audioTracks` → alternate HLS variant → FFmpeg remux), ordinal-vs-`index` track addressing, and that a backend built without FFmpeg (`WITH_FFMPEG=0`) skips the remux rung locally instead of firing a doomed request |
 | `subs.js` | Subtitle mount/rebuild loop fix, per-track `shift`, language auto-selection, embedded-track menu listing |
 | `misc.js` | Remote OK-key-on-timeline fix (no false seek-to-0), shared label-building helpers (`pushLabelPart`/`truthyFlag`), `play()` promise rejection handling (AbortError silencing, NotAllowedError messaging) |
 | `quality.js` | Device-capability probing (HEVC/HDR/MSE) including the three-way "browser did not answer" case and the multi-spelling codec probe, what gets declared to KinoPub, the explicit device profile, quality-variant selection and ranking, stream-mode fallback on Direct-playback failure, fullscreen mode selection |
