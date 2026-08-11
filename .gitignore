@@ -10,7 +10,8 @@ ignore
 # Личные настройки Claude Code: персональные разрешения конкретной машины,
 # файл заводится сам. Общий .claude/settings.json остаётся в репозитории
 # намеренно - он несёт Stop-хук с рабочей конвенцией проекта (см. README).
-.claude/settings.local.json# Выгрузки рабочей базы: внутри sessions с access_token и refresh_token
+.claude/settings.local.json
+# Выгрузки рабочей базы: внутри sessions с access_token и refresh_token
 # KinoPub. Каталог репозитория - опасное место для таких файлов, потому что
 # Stop-хук делает git add -A; одна такая выгрузка уже уехала на GitHub и
 # потребовала переписывания истории.
