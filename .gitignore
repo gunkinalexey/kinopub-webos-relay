@@ -7,3 +7,7 @@ examples/
 frontend/tests/node_modules/
 frontend/tests/preview.html
 ignore
+# Личные настройки Claude Code: персональные разрешения конкретной машины,
+# файл заводится сам. Общий .claude/settings.json остаётся в репозитории
+# намеренно - он несёт Stop-хук с рабочей конвенцией проекта (см. README).
+.claude/settings.local.json
