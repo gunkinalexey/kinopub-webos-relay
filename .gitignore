@@ -6,3 +6,4 @@ examples/
 # frontend/tests/: npm install artifacts and the regenerated preview page
 frontend/tests/node_modules/
 frontend/tests/preview.html
+ignore

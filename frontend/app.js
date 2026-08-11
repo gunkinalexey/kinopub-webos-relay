@@ -1758,7 +1758,21 @@ var LANGUAGE_NAMES=(function(){
   'Люксембургский':'lb ltz','Африкаанс':'af afr','Суахили':'sw swa','Зулу':'zu zul','Коса':'xh xho',
   'Амхарский':'am amh','Сомалийский':'so som','Йоруба':'yo yor','Хауса':'ha hau','Игбо':'ig ibo',
   'Латинский':'la lat','Санскрит':'sa san','Эсперанто':'eo epo','Идиш':'yi yid','Маори':'mi mri mao',
-  'Гавайский':'haw','Несколько языков':'mul','Без речи':'zxx','Неопределённый':'und'
+  'Гавайский':'haw','Несколько языков':'mul','Без речи':'zxx','Неопределённый':'und',
+  // Not an ISO code at all - KinoPub's own marker for machine-generated
+  // subtitles, and by frequency the third most common value in the field
+  // (16 occurrences across 35 sampled titles, behind only `eng` and `rus`).
+  // The payload carries no name for it: a subtitle object has exactly
+  // lang/shift/embed/forced/file/url, so this label is the only thing the
+  // user ever sees. Three such files were downloaded and read to find out
+  // what they actually are - on a Turkish film (alongside `tur`), a Spanish
+  // one (alongside `spa`) and a Russian one (its only track) - and all three
+  // turned out to be Russian text carrying obvious speech-recognition
+  // damage ("освещается моим родителям" for "посвящается", "нашу гавор" for
+  // "наш говор"). Hence the language is stated, because that is what you
+  // pick a track by, and the "(ИИ)" is kept, because the quality is visibly
+  // not that of a human translation.
+  'Русский (ИИ)':'ai'
  };
  var out={};
  for(var name in spec){if(!spec.hasOwnProperty(name))continue;var codes=spec[name].split(' ');for(var i=0;i<codes.length;i++)out[codes[i]]=name;}
