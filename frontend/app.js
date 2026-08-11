@@ -1037,7 +1037,12 @@ function detailsInfoRows(item){
  var durationValue=detailsDurationValue(item);
  if(durationValue)rows.push(['Длительность',durationValue]);
  if(item.quality)rows.push(['Качество',esc(item.quality)]);
- var subs=(item.subtitle_langs||[]).map(audioLanguageName);
+ // Deduplicated after translation, not before: the backend collects these
+ // across every media entry and dedups the raw codes, so a title carrying
+ // both spellings of one language (fra + fre, ron + rum) arrives as two
+ // distinct strings that render as the same word twice.
+ var subs=[],seenSubs={};
+ (item.subtitle_langs||[]).forEach(function(code){var name=audioLanguageName(code);if(name&&!seenSubs[name]){seenSubs[name]=1;subs.push(name);}});
  if(subs.length)rows.push(['Субтитры',esc(subs.join(', '))]);
  return rows;
 }
@@ -1711,7 +1716,63 @@ function applySubtitleChoice(choice,force){choice=choice||'off';var key=subtitle
 function preferredSubtitleChoice(){var want=langKey(state.settings&&state.settings.subtitles);if(!want||want==='of')return 'off';var list=state.playerSubtitles||[];for(var i=0;i<list.length;i++)if(subtitleHasUrl(list[i])&&langKey(subtitleLanguage(list[i]))===want)return 'track:'+i;return 'off';}
 function normalizeSubtitleSize(value){var n=Number(value);if(!isFinite(n))return 100;var allowed=[75,100,125,150],best=100,gap=1e9;for(var i=0;i<allowed.length;i++){var d=Math.abs(allowed[i]-n);if(d<gap){gap=d;best=allowed[i];}}return best;}
 function applySubtitleSize(value){var size=normalizeSubtitleSize(value),layer=$('playerLayer');state.settings.subtitle_size=size;if(layer){var classes=['subs-75','subs-100','subs-125','subs-150'];for(var i=0;i<classes.length;i++)layer.classList.remove(classes[i]);layer.classList.add('subs-'+size);}var picker=$('playerSubtitleSize');if(picker)picker.value=String(size);var setting=$('setSubSize');if(setting)setting.value=String(size);return size;}
-function audioLanguageName(code){var raw=String(code||'').trim(),key=raw.toLowerCase().replace('_','-').split('-')[0];var names={ru:'Русский',rus:'Русский',uk:'Украинский',ukr:'Украинский',en:'Английский',eng:'Английский',de:'Немецкий',deu:'Немецкий',ger:'Немецкий',fr:'Французский',fra:'Французский',fre:'Французский',es:'Испанский',spa:'Испанский',it:'Итальянский',ita:'Итальянский',ja:'Японский',jpn:'Японский',ko:'Корейский',kor:'Корейский',zh:'Китайский',zho:'Китайский',chi:'Китайский',pl:'Польский',pol:'Польский',tr:'Турецкий',tur:'Турецкий'};return names[key]||raw;}
+// KinoPub labels subtitle/audio tracks with ISO 639-2 three-letter codes
+// (`fra`, `ron`, `zho`, `ara`...) whenever the payload carries no
+// `language_name`. The old table here knew 14 languages, so everything else
+// fell through to `||raw` and the row read "Французский, ron, Китайский,
+// Русский, Украинский, Испанский, Английский, ara" - translated names and
+// bare codes side by side.
+//
+// Both three-letter variants are listed because ISO 639-2 has two of them and
+// KinoPub is not consistent about which it sends: /T (terminological, native
+// spelling - fra, deu, zho, ron, ces) and /B (bibliographic, English-derived -
+// fre, ger, chi, rum, cze). They differ for about twenty languages, and
+// knowing only one spelling is exactly how `ron` slipped through while `fra`
+// worked. Two-letter 639-1 codes are kept for `language`/`locale` fields that
+// use them.
+//
+// Written as name -> codes and inverted once at load: the flat form repeated
+// each Russian name two or three times, which is what made it easy to add a
+// language and silently miss one of its spellings.
+var LANGUAGE_NAMES=(function(){
+ var spec={
+  'Русский':'ru rus','Украинский':'uk ukr','Белорусский':'be bel','Английский':'en eng',
+  'Немецкий':'de deu ger','Французский':'fr fra fre','Испанский':'es spa','Итальянский':'it ita',
+  'Португальский':'pt por','Нидерландский':'nl nld dut','Польский':'pl pol','Чешский':'cs ces cze',
+  'Словацкий':'sk slk slo','Венгерский':'hu hun','Румынский':'ro ron rum','Молдавский':'mo mol',
+  'Болгарский':'bg bul','Сербский':'sr srp','Хорватский':'hr hrv','Боснийский':'bs bos',
+  'Словенский':'sl slv','Македонский':'mk mkd mac','Албанский':'sq sqi alb','Греческий':'el ell gre',
+  'Турецкий':'tr tur','Шведский':'sv swe','Норвежский':'no nor nb nob nn nno','Датский':'da dan',
+  'Финский':'fi fin','Исландский':'is isl ice','Эстонский':'et est','Латышский':'lv lav',
+  'Литовский':'lt lit','Иврит':'he heb iw','Арабский':'ar ara','Персидский':'fa fas per',
+  'Пушту':'ps pus','Курдский':'ku kur','Хинди':'hi hin','Урду':'ur urd','Бенгальский':'bn ben',
+  'Тамильский':'ta tam','Телугу':'te tel','Маратхи':'mr mar','Панджаби':'pa pan','Гуджарати':'gu guj',
+  'Каннада':'kn kan','Малаялам':'ml mal','Непальский':'ne nep','Сингальский':'si sin',
+  'Китайский':'zh zho chi','Японский':'ja jpn','Корейский':'ko kor','Тайский':'th tha',
+  'Вьетнамский':'vi vie','Индонезийский':'id ind in','Малайский':'ms msa may','Тагальский':'tl tgl',
+  'Филиппинский':'fil','Бирманский':'my mya bur','Кхмерский':'km khm','Лаосский':'lo lao',
+  'Монгольский':'mn mon','Казахский':'kk kaz','Киргизский':'ky kir','Узбекский':'uz uzb',
+  'Таджикский':'tg tgk','Туркменский':'tk tuk','Азербайджанский':'az aze','Армянский':'hy hye arm',
+  'Грузинский':'ka kat geo','Каталанский':'ca cat','Галисийский':'gl glg','Баскский':'eu eus baq',
+  'Валлийский':'cy cym wel','Ирландский':'ga gle','Шотландский гэльский':'gd gla','Мальтийский':'mt mlt',
+  'Люксембургский':'lb ltz','Африкаанс':'af afr','Суахили':'sw swa','Зулу':'zu zul','Коса':'xh xho',
+  'Амхарский':'am amh','Сомалийский':'so som','Йоруба':'yo yor','Хауса':'ha hau','Игбо':'ig ibo',
+  'Латинский':'la lat','Санскрит':'sa san','Эсперанто':'eo epo','Идиш':'yi yid','Маори':'mi mri mao',
+  'Гавайский':'haw','Несколько языков':'mul','Без речи':'zxx','Неопределённый':'und'
+ };
+ var out={};
+ for(var name in spec){if(!spec.hasOwnProperty(name))continue;var codes=spec[name].split(' ');for(var i=0;i<codes.length;i++)out[codes[i]]=name;}
+ return out;
+// Closed as `})();` on purpose, NOT in the brace-paren style this file ends
+// with. Every script in frontend/tests reaches the app's internals by string-
+// replacing that closing sequence, and String.replace swaps only the FIRST
+// match - so an inner IIFE spelled the same way steals the replacement and
+// all 312 checks die on `global.__app` being undefined, nowhere near the line
+// actually at fault. Do not write that sequence anywhere above the real end
+// of this file, including inside a comment: this note originally spelled it
+// out and broke the suite exactly as described.
+})();
+function audioLanguageName(code){var raw=String(code||'').trim(),key=raw.toLowerCase().replace(/_/g,'-').split('-')[0];return LANGUAGE_NAMES[key]||raw;}
 function audioScalar(value){if(value===undefined||value===null)return '';if(typeof value==='string'||typeof value==='number'||typeof value==='boolean'){var text=String(value).trim();return text==='[object Object]'?'':text;}if(Array.isArray(value)){for(var i=0;i<value.length;i++){var arrayText=audioScalar(value[i]);if(arrayText)return arrayText;}return '';}if(typeof value==='object'){var preferred=['title','name','label','display_name','short_name','studio','team','author','type','voice','translation','language_name','language','lang','codec','format_name','value'];for(var j=0;j<preferred.length;j++){if(Object.prototype.hasOwnProperty.call(value,preferred[j])){var nested=audioScalar(value[preferred[j]]);if(nested)return nested;}}return '';}return '';}
 function firstAudioValue(obj,keys){if(!obj||typeof obj!=='object')return '';for(var i=0;i<keys.length;i++){var v=audioScalar(obj[keys[i]]);if(v)return v;}return '';}
 function normalizeChannels(value){var v=String(value||'').trim();if(!v)return '';var low=v.toLowerCase();if(low==='2'||low==='2.0'||low==='stereo')return '2.0';if(low==='1'||low==='1.0'||low==='mono')return '1.0';if(low==='6'||low==='5.1')return '5.1';if(low==='8'||low==='7.1')return '7.1';return v;}
