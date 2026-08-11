@@ -1,7 +1,7 @@
 # Handoff — kinopub-webos-client
 
 Written 2026-08-07 to continue this work in a fresh context window. Read this
-first, then `README.md` (full changelog, newest first) if you need detail on
+first, then `CHANGELOG.md` (full changelog, newest first) if you need detail on
 a specific past change.
 
 ## Open items — check these before anything else
@@ -39,7 +39,7 @@ Two things worth knowing about on pickup:
    flags are left alone, direct no longer vetoed by a single `canPlayType`
    string, plus a "Возможности устройства" setting (auto / TV / H.264-only)
    and diagnostics that show KinoPub's actual device flags via the new
-   `GET /device/state`. See README's "Direct и HDR: приложение само отбирало
+   `GET /device/state`. See CHANGELOG's "Direct и HDR: приложение само отбирало
    их у телевизора" for the full trace and the flag matrix.
    **The device profile is currently set to "Телевизор"** on the user's
    account, which pins HEVC+4K+HDR regardless of what the TV's browser
@@ -111,7 +111,7 @@ each response: `git add -A && git commit -m "checkpoint: ..."`, then if
   automatically at turn end. Committing mid-turn yourself just adds noise.
 - Commit messages are auto-generated (`checkpoint: <dirs>,... (<timestamp>)`)
   and carry no meaning beyond "these paths changed". Do not treat git log as
-  a changelog — **`README.md` is the changelog**, written in Russian, newest
+  a changelog — **`CHANGELOG.md` is the changelog** (`README.md` is the project/deployment doc), written in Russian, newest
   entry first, one section per user-visible change. Keep adding to it the
   same way: a `## vX.Y.Z — <short title>` heading (or `## backend 0.9.NN —
   ...` when only the backend version moved), then prose explaining *why*,
@@ -169,7 +169,7 @@ has been: don't fake it, don't add the UI control, say so in a comment/
 changelog entry. Keep doing this — a user on this project would rather have
 an honest smaller filter panel than a bigger one with dead switches.
 
-## Everything fixed/built, most recent first (README.md has full prose, this is the map)
+## Everything fixed/built, most recent first (CHANGELOG.md has full prose, this is the map)
 
 Backend 0.9.79 → 0.9.97 this stretch, frontend tests 159 → 312:
 
@@ -269,7 +269,7 @@ Backend 0.9.79 → 0.9.97 this stretch, frontend tests 159 → 312:
 17. **Filter panel rebuilt to look like kino.pub's own**, and the two rating
     ranges turned out to be real after all - `conditions[]` accepts
     `imdb_rating` and `kinopoisk_rating` (item #15 below says they do not
-    exist; that was wrong, see README). Ratings step by whole numbers on
+    exist; that was wrong, see CHANGELOG). Ratings step by whole numbers on
     purpose: KinoPub discards the decimal part of the bound. The sliders are
     remote-first (OK enters edit mode, OK swaps handle, arrows move, Back
     exits) because two handles on one rail cannot be told apart by `move()`.
@@ -331,7 +331,7 @@ Backend 0.9.79 → 0.9.97 this stretch, frontend tests 159 → 312:
     (real documented endpoints for those exist, not wired up — not asked
     for).
 9. **Quality selection overhaul** (biggest single piece of work this
-   stretch — see README "Качество: фильм открывается в максимуме" for full
+   stretch — see CHANGELOG "Качество: фильм открывается в максимуме" for full
    detail): device capability flags (`support4k`/`supportHevc`/`supportHdr`)
    are now **reported to KinoPub from real browser probes**
    (`POST /device/capabilities`) instead of hardcoded `true` — this
@@ -379,7 +379,7 @@ Backend 0.9.79 → 0.9.97 this stretch, frontend tests 159 → 312:
 2. **Filter/quality/HDR items above are the bulk of this stretch.** Earlier
    items (#1-8 in prior handoffs — 401 handling, catalogue pagination,
    history dates, episode carousel, vote buttons, browser back/forward,
-   etc.) are stable and covered in README's earlier entries; not restated
+   etc.) are stable and covered in CHANGELOG's earlier entries; not restated
    here.
 
 ## Known gaps / flagged but not done
@@ -471,7 +471,7 @@ a framework, unless asked.
    `curl http://localhost:8080/bridge/health` — confirm what's actually
    running vs. what's in git. Expect backend `0.9.97`, `"ffmpeg": false`
    (see open item #1 — that's the current, possibly-unintended, state).
-3. Skim `README.md` top-to-bottom (newest-first) for full prose behind any
+3. Skim `CHANGELOG.md` top-to-bottom (newest-first) for full prose behind any
    bullet in the "Everything fixed" map above.
 4. If touching `frontend/app.js`: run the suite in `frontend/tests/` before
    and after (see Testing above). Most regressions across this whole
