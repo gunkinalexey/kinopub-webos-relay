@@ -113,7 +113,12 @@ def db_init() -> None:
         conn.execute("CREATE TABLE IF NOT EXISTS kv_cache (key TEXT PRIMARY KEY, payload TEXT NOT NULL, expires_at REAL NOT NULL)")
         conn.execute('DELETE FROM kv_cache WHERE expires_at < ?', (time.time(),))
         conn.execute("CREATE TABLE IF NOT EXISTS user_settings (profile TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at REAL NOT NULL)")
-        conn.execute("CREATE TABLE IF NOT EXISTS watch_progress (media_id TEXT NOT NULL, episode_id TEXT NOT NULL DEFAULT '', position REAL NOT NULL, duration REAL NOT NULL, completed INTEGER NOT NULL DEFAULT 0, updated_at REAL NOT NULL, PRIMARY KEY(media_id, episode_id))")
+        # watch_progress убрана: она дублировала прогресс, который KinoPub
+        # хранит сам (сюда он попадал через v1/watching/marktime, читался из
+        # v1/watching). Сверено live - позиции совпадали до секунды и для
+        # фильмов, и для серий. Отдельная копия означала лишь два источника
+        # правды, расходящиеся при любом сбое зеркалирования.
+        conn.execute('DROP TABLE IF EXISTS watch_progress')
 
 
 def kv_get(key: str) -> Optional[Any]:
@@ -3740,30 +3745,85 @@ async def watching_statuses(kp_session: Optional[str] = Cookie(default=None)) ->
     return {'statuses': statuses, 'count': len(statuses)}
 
 
-@app.get('/history')
-def get_history(media_id: str = '') -> Dict[str, Any]:
-    """Locally stored resume positions, newest first.
+def _progress_rows_from_watching(media_id: str, payload: Any) -> List[Dict[str, Any]]:
+    """`v1/watching` -> строки в том же виде, что раньше отдавала SQLite.
 
-    ``media_id`` narrows it to one title so the details screen can offer
-    "continue" without pulling the whole list.
+    Форма ответа сохранена ровно потому, что её читает фронтенд
+    (`progressRows`/`episodeProgress`/`latestResumable`): `episode_id`,
+    `position`, `duration`, `completed` и порядок «сначала недавнее».
+    Фильмы приходят в `videos`, сериалы - в `seasons[].episodes`; и там и
+    там есть `time`, `duration`, `status` и `updated`, поэтому обе ветки
+    сводятся к одному списку.
     """
-    with db_connect() as conn:
-        if media_id:
-            rows = conn.execute(
-                'SELECT * FROM watch_progress WHERE media_id = ? ORDER BY updated_at DESC',
-                (media_id,)).fetchall()
-        else:
-            rows = conn.execute('SELECT * FROM watch_progress ORDER BY updated_at DESC LIMIT 100').fetchall()
-    return {'items': [dict(x) for x in rows]}
+    item = payload.get('item') if isinstance(payload, dict) else None
+    item = item if isinstance(item, dict) else {}
+    entries: List[Dict[str, Any]] = []
+    for video in item.get('videos') or []:
+        if isinstance(video, dict):
+            entries.append(video)
+    for season in item.get('seasons') or []:
+        if not isinstance(season, dict):
+            continue
+        for episode in season.get('episodes') or []:
+            if isinstance(episode, dict):
+                entries.append(episode)
+
+    rows: List[Dict[str, Any]] = []
+    for entry in entries:
+        position = _plain_number(entry.get('time')) or 0
+        duration = _plain_number(entry.get('duration')) or 0
+        # `status` у KinoPub: 1 - досмотрено, 0 - в процессе, -1 - не начато.
+        # Запись без позиции не нужна: локальная таблица такие тоже не
+        # хранила, а «Продолжить» на нулевой секунде показывать нечего.
+        status = _first_int(entry.get('status'))
+        if position <= 0 and status != 1:
+            continue
+        rows.append({
+            'media_id': str(media_id),
+            'episode_id': str(entry.get('id') or ''),
+            'position': float(position),
+            'duration': float(duration),
+            'completed': 1 if status == 1 else 0,
+            'updated_at': float(_plain_number(entry.get('updated')) or 0),
+        })
+    rows.sort(key=lambda r: r['updated_at'], reverse=True)
+    return rows
+
+
+@app.get('/history')
+async def get_history(media_id: str = '', kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """Позиции возобновления для одного тайтла, недавние первыми.
+
+    Раньше здесь была своя таблица `watch_progress`, дублировавшая то, что
+    KinoPub и так хранит: каждое сохранение прогресса уходит к нему через
+    `v1/watching/marktime` (см. `_mirror_watch_progress`), а обратно всё
+    возвращается в `v1/watching`. Сверено live на шести тайтлах - позиции
+    совпадали до секунды и для фильмов, и для серий, - поэтому локальная
+    копия убрана, а данные берутся из одного источника.
+
+    Без `media_id` список не собирается: общую карту просмотренного отдаёт
+    `/watching/statuses`, который и так обходит историю KinoPub, и второй
+    проход по ней был бы лишним запросом ради тех же данных.
+    """
+    if not media_id:
+        return {'items': []}
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    try:
+        payload = await kino_get(session, 'v1/watching', {'id': media_id})
+    except HTTPException as exc:
+        # Пустой список вместо ошибки: без прогресса карточка просто
+        # покажет «Смотреть» вместо «Продолжить», а падать целиком из-за
+        # недоступного апстрима ей незачем.
+        log_event('history', 'Watch progress unavailable', {'media_id': media_id, 'status': exc.status_code})
+        return {'items': []}
+    return {'items': _progress_rows_from_watching(media_id, payload)}
+
 
 @app.put('/history')
 async def put_history(payload: ProgressPayload, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, str]:
-    episode=payload.episode_id or ''
-    completed=payload.completed or (payload.duration > 0 and payload.position / payload.duration >= .9)
-    with db_connect() as conn:
-        conn.execute("INSERT INTO watch_progress(media_id,episode_id,position,duration,completed,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(media_id,episode_id) DO UPDATE SET position=excluded.position,duration=excluded.duration,completed=excluded.completed,updated_at=excluded.updated_at", (payload.media_id,episode,float(payload.position),float(payload.duration),1 if completed else 0,time.time()))
+    completed = payload.completed or (payload.duration > 0 and payload.position / payload.duration >= .9)
     await _mirror_watch_progress(payload, completed, kp_session)
-    return {'status':'ok'}
+    return {'status': 'ok'}
 
 
 async def _mirror_watch_progress(payload: ProgressPayload, completed: bool, kp_session: Optional[str]) -> None:
