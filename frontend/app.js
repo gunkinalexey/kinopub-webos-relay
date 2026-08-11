@@ -19,7 +19,7 @@ function wrapAuthCheck(name){var orig=KPApi[name];if(typeof orig!=='function')re
 function imageCacheVersion(){try{var v=localStorage.getItem('kp_image_version');if(v)return v;}catch(e){}var fresh=String(Date.now());try{localStorage.setItem('kp_image_version',fresh);}catch(e){}return fresh;}
 function bumpImageCacheVersion(){var fresh=String(Date.now());try{localStorage.setItem('kp_image_version',fresh);}catch(e){}return fresh;}
 
-var dogBrandIcons=['assets/dog/dog-icon-1.png','assets/dog/dog-icon-2.png','assets/dog/dog-icon-3.png'];
+var dogBrandIcons=['assets/dog/dog-icon-1.webp','assets/dog/dog-icon-2.webp','assets/dog/dog-icon-3.webp'];
 var dogBrandIndex=-1,brandingRotationTimer=null;
 // киноТёрк icons come from whatever image files are dropped in assets/dog/
 // at deploy time - nginx's JSON autoindex on that folder (nginx.conf) lists
@@ -30,8 +30,13 @@ function updateDogPreviewStack(){var img=$('appIconPreviewDog');if(img&&dogBrand
 loadDogBrandIcons();
 function normalizeAppIcon(value){return value==='kinopub'?'kinopub':'kinoterk';}
 function selectedAppIcon(){var nodes=document.querySelectorAll('input[name="appIcon"]');for(var i=0;i<nodes.length;i++)if(nodes[i].checked)return normalizeAppIcon(nodes[i].value);return 'kinopub';}
-function setFavicon(src,type){var link=$('appFavicon');if(!link){link=document.createElement('link');link.id='appFavicon';link.rel='icon';document.head.appendChild(link);}link.type=type||(/\.svg(?:$|\?)/i.test(src)?'image/svg+xml':'image/png');link.href=src;}
-function nextDogBrandIcon(){var next;if(dogBrandIcons.length<2)next=0;else{do{next=Math.floor(Math.random()*dogBrandIcons.length);}while(next===dogBrandIndex);}dogBrandIndex=next;var src=dogBrandIcons[next],logo=$('brandLogo'),preview=$('brandLogoPreviewImg');if(logo)logo.src=src;if(preview)preview.src=src;setFavicon(src,'image/png');}
+// Тип выводится из расширения, а не задаётся вызывающим: иконки киноТёрка
+// лежат в той папке, куда пользователь их положил, и формат там какой угодно
+// из поддерживаемых (см. фильтр в loadDogBrandIcons). Прибитый гвоздями
+// 'image/png' на .webp-файле - ровно то, что здесь и было.
+function faviconType(src){var m=/\.([a-z0-9]+)(?:$|\?)/i.exec(String(src||''));var ext=m?m[1].toLowerCase():'';if(ext==='svg')return 'image/svg+xml';if(ext==='jpg'||ext==='jpeg')return 'image/jpeg';if(ext==='webp')return 'image/webp';if(ext==='gif')return 'image/gif';return 'image/png';}
+function setFavicon(src,type){var link=$('appFavicon');if(!link){link=document.createElement('link');link.id='appFavicon';link.rel='icon';document.head.appendChild(link);}link.type=type||faviconType(src);link.href=src;}
+function nextDogBrandIcon(){var next;if(dogBrandIcons.length<2)next=0;else{do{next=Math.floor(Math.random()*dogBrandIcons.length);}while(next===dogBrandIndex);}dogBrandIndex=next;var src=dogBrandIcons[next],logo=$('brandLogo'),preview=$('brandLogoPreviewImg');if(logo)logo.src=src;if(preview)preview.src=src;setFavicon(src);}
 function stopBrandingRotation(){if(brandingRotationTimer){clearInterval(brandingRotationTimer);brandingRotationTimer=null;}}
 function applyBranding(iconKey){var key=normalizeAppIcon(iconKey),logo=$('brandLogo'),text=$('brandText');stopBrandingRotation();if(key==='kinopub'){if(logo){logo.src='assets/kp-logo.svg';logo.classList.remove('dog-brand-logo');}if(text)text.textContent='kinopub';document.title='kinopub';setFavicon('assets/kp-logo.svg','image/svg+xml');document.body.setAttribute('data-app-brand','kinopub');return;}if(logo)logo.classList.add('dog-brand-logo');if(text)text.textContent='киноТёрк';document.title='киноТёрк';document.body.setAttribute('data-app-brand','kinoterk');nextDogBrandIcon();brandingRotationTimer=setInterval(nextDogBrandIcon,5*60*1000);}
 function appBrandName(){return normalizeAppIcon(state.settings&&state.settings.app_icon)==='kinoterk'?'киноТёрк':'KinoPub';}
