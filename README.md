@@ -36,7 +36,13 @@
 
 ```bash
 git clone https://github.com/gunkinalexey/kinopub-webos-client.git kinopub
+```
+
+```bash
 cd kinopub
+```
+
+```bash
 cp .env.example .env
 ```
 
@@ -122,8 +128,14 @@ pct create 120 local:vztmpl/$TMPL \
   --onboot 1 \
   --features nesting=1,keyctl=1 \
   --password
+```
 
-pct start 120 && pct enter 120
+```bash
+pct start 120
+```
+
+```bash
+pct enter 120
 ```
 
 Что здесь важно:
@@ -139,12 +151,39 @@ pct start 120 && pct enter 120
 Внутри контейнера:
 
 ```bash
-apt update && apt install -y ca-certificates curl git
+apt update
+```
+
+```bash
+apt install -y ca-certificates curl git
+```
+
+Добавить ключ и репозиторий Docker:
+
+```bash
 install -m 0755 -d /etc/apt/keyrings
+```
+
+```bash
 curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+```
+
+```bash
 chmod a+r /etc/apt/keyrings/docker.asc
+```
+
+```bash
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
-apt update && apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+Установить:
+
+```bash
+apt update
+```
+
+```bash
+apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
 Проверить, что Docker в LXC действительно работает:
@@ -157,26 +196,60 @@ docker run --rm hello-world
 
 ## 2.3. Код
 
+### Если репозиторий публичный
+
 ```bash
-cd /opt && git clone https://github.com/gunkinalexey/kinopub-webos-client.git kinopub && cd kinopub
+cd /opt
 ```
 
-Для приватного репозитория пароль от аккаунта GitHub не подойдёт. Правильнее
-всего **deploy key** — он привязан к одному репозиторию и только на чтение,
-в отличие от токена с правом `repo`, который открывает все ваши репозитории
-на запись:
+```bash
+git clone https://github.com/gunkinalexey/kinopub-webos-client.git kinopub
+```
+
+```bash
+cd kinopub
+```
+
+### Если репозиторий приватный
+
+Пароль от аккаунта GitHub не подойдёт — их отключили для git-операций.
+Правильнее всего **deploy key**: он привязан к одному репозиторию и только на
+чтение, в отличие от токена с правом `repo`, который открывает все ваши
+репозитории на запись.
+
+Создать ключ:
 
 ```bash
 ssh-keygen -t ed25519 -C "kinopub-lxc" -f ~/.ssh/id_ed25519 -N ""
+```
+
+Показать публичную часть:
+
+```bash
 cat ~/.ssh/id_ed25519.pub
 ```
 
 Вывод добавить в **репозиторий → Settings → Deploy keys → Add deploy key**,
-галочку «Allow write access» не ставить. Затем:
+галочку «Allow write access» **не** ставить.
+
+Принять хост-ключ GitHub, иначе первый `git` спросит подтверждение:
 
 ```bash
 ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
-cd /opt && git clone git@github.com:<вы>/<репозиторий>.git kinopub && cd kinopub
+```
+
+Клонировать по SSH:
+
+```bash
+cd /opt
+```
+
+```bash
+git clone git@github.com:<вы>/<репозиторий>.git kinopub
+```
+
+```bash
+cd kinopub
 ```
 
 ## 2.4. Настройки и запуск
@@ -193,7 +266,13 @@ CORS_ORIGINS=http://kinopub.lan
 ```
 
 ```bash
-docker compose up -d --build && docker compose ps
+docker compose up -d --build
+```
+
+Проверить, что оба контейнера поднялись:
+
+```bash
+docker compose ps
 ```
 
 Проверка:
@@ -211,8 +290,17 @@ curl -s http://localhost:8080/bridge/health
 ```bash
 # на старой машине
 docker compose cp backend:/data/kp.db ./kp.db
-# скопировать файл на новую (scp), затем на новой, при запущенных контейнерах:
-docker compose cp ./kp.db backend:/data/kp.db && docker compose restart backend
+```
+
+Скопировать файл на новую машину (`scp`), затем там — при уже запущенных
+контейнерах:
+
+```bash
+docker compose cp ./kp.db backend:/data/kp.db
+```
+
+```bash
+docker compose restart backend
 ```
 
 > Файл содержит `access_token` и `refresh_token` KinoPub. **Не кладите его
@@ -262,18 +350,45 @@ pct create 110 local:vztmpl/$TMPL \
   --onboot 1 \
   --features nesting=1 \
   --password
+```
 
-pct start 110 && pct enter 110
+```bash
+pct start 110
+```
+
+```bash
+pct enter 110
 ```
 
 Caddy ставится **нативно, без Docker**: это один статический бинарник со
 своим systemd-юнитом, лишний слой ради него не нужен.
 
 ```bash
-apt update && apt install -y debian-keyring debian-archive-keyring apt-transport-https curl gpg
+apt update
+```
+
+```bash
+apt install -y debian-keyring debian-archive-keyring apt-transport-https curl gpg
+```
+
+Добавить ключ и репозиторий Caddy:
+
+```bash
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+```
+
+```bash
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
-apt update && apt install -y caddy
+```
+
+Установить:
+
+```bash
+apt update
+```
+
+```bash
+apt install -y caddy
 ```
 
 ## 3.2. Конфиг Caddy
@@ -441,7 +556,11 @@ Kodi-плагина (`xbmc`), которыми пользуются сторон
 ## Обновление
 
 ```bash
-git pull && docker compose up -d --build
+git pull
+```
+
+```bash
+docker compose up -d --build
 ```
 
 Фронтенд смонтирован томом и подхватывается сразу после обновления страницы —
@@ -454,7 +573,14 @@ git pull && docker compose up -d --build
 ещё до первой проверки и молча дают ноль строк:
 
 ```bash
-cd frontend/tests && npm install
+cd frontend/tests
+```
+
+```bash
+npm install
+```
+
+```bash
 for f in harness actions episodes misc panel quality sections subs; do
   node $f.js ../app.js
 done
@@ -465,6 +591,9 @@ done
 
 ```bash
 docker compose cp backend/smoke_test.py backend:/app/smoke_test.py
+```
+
+```bash
 docker compose exec -T backend python smoke_test.py
 ```
 
