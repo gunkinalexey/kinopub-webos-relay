@@ -1,4 +1,4 @@
-# kinopub-webos-client
+# kinopub-webos-relay
 
 Веб-клиент [KinoPub](https://kino.pub) для телевизоров на webOS и обычных
 браузеров. Каталог, поиск, фильтры, закладки, история, подборки, выбор
@@ -35,7 +35,7 @@
 ## Запуск
 
 ```bash
-git clone https://github.com/gunkinalexey/kinopub-webos-client.git kinopub
+git clone https://github.com/gunkinalexey/kinopub-webos-relay.git kinopub
 ```
 
 ```bash
@@ -140,11 +140,38 @@ pct enter 120
 
 Что здесь важно:
 
+- **Адреса должны быть из вашей сети.** `192.168.0.50` — пример. Если у вас
+  другая подсеть, контейнер создастся молча, но наружу ходить не будет:
+  `apt update` зависнет на `Ign:`, DNS не разрешится. Свои значения
+  посмотрите **на хосте Proxmox**:
+
+  ```bash
+  ip -4 addr show vmbr0
+  ```
+
+  ```bash
+  ip route | grep default
+  ```
+
+  Первая команда покажет подсеть, вторая — шлюз. Он же обычно и DNS.
+  Для контейнера возьмите свободный адрес из той же подсети.
+
+- **Адрес именно статический** — на него будут ссылаться прокси и запись в
+  DNS. Уедет по DHCP — перестанет открываться по имени.
 - **`--features nesting=1,keyctl=1`** — без них Docker внутри не заведётся.
   `nesting` нужен ещё и самому systemd 257 из Debian 13, Proxmox предупреждает
   об этом при создании.
-- **Статический IP** — на него будет ссылаться прокси и DNS.
 - **`--onboot 1`** — иначе после перезагрузки хоста сервис не поднимется.
+
+Ошиблись с адресом — чинится без пересоздания:
+
+```bash
+pct set 120 --net0 name=eth0,bridge=vmbr0,ip=192.168.0.50/24,gw=192.168.0.1 --nameserver 192.168.0.1
+```
+
+```bash
+pct reboot 120
+```
 
 ## 2.2. Docker
 
@@ -203,7 +230,7 @@ cd /opt
 ```
 
 ```bash
-git clone https://github.com/gunkinalexey/kinopub-webos-client.git kinopub
+git clone https://github.com/gunkinalexey/kinopub-webos-relay.git kinopub
 ```
 
 ```bash
