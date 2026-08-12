@@ -93,34 +93,38 @@ inside the backend container instead (see "Verifying live" below).
 - Branch: `rework/audio-subtitles-details` (not merged to `main`)
 - Backend running version: **0.9.97**, containers up via `docker compose up -d`
 - `curl http://localhost:8080/bridge/health` to check it's alive
-- Working tree has uncommitted changes at handoff time — the auto-commit
-  hook (see below) picks them up at the end of the current turn if this
-  handoff is being read mid-session; if you're starting fresh, they're
-  probably already committed.
 - **312 frontend checks + 36 backend smoke checks, all green** (see Testing
   below)
+- Deployed on Proxmox: LXC `kinopub` (192.168.0.50) runs the compose stack
+  from `/opt/kinopub`, LXC `edge` (192.168.0.40) runs Caddy and serves it at
+  `http://kinopub.lan`. Remote is a private GitHub repo; deploy is
+  `git pull && docker compose up -d --build`. The Windows checkout is for
+  development only.
 
 ## How work has been happening (read this before doing anything)
 
-**A `Stop` hook auto-commits and rebuilds after every assistant turn.**
-Configured in `.claude/settings.json` → `.claude/hooks/checkpoint.sh`. After
-each response: `git add -A && git commit -m "checkpoint: ..."`, then if
-`backend/` changed, `docker compose up -d --build backend`. This means:
+**Commit deliberately, at the end of a logical change.** There used to be a
+`Stop` hook that ran `git add -A` and committed after every assistant turn;
+it was removed, and for a concrete reason: a working-database export left in
+the repo directory (`kp-transfer.db`, containing KinoPub `access_token` and
+`refresh_token`) was swept into a commit and pushed to GitHub before anyone
+looked. Purging it needed a history rewrite and a device revocation. Blanket
+`git add -A` on a timer is how that happens — stage what you actually
+changed.
 
-- You do not need to (and should not try to) manually commit — it happens
-  automatically at turn end. Committing mid-turn yourself just adds noise.
-- Commit messages are auto-generated (`checkpoint: <dirs>,... (<timestamp>)`)
-  and carry no meaning beyond "these paths changed". Do not treat git log as
-  a changelog — **`CHANGELOG.md` is the changelog** (`README.md` is the project/deployment doc), written in Russian, newest
-  entry first, one section per user-visible change. Keep adding to it the
-  same way: a `## vX.Y.Z — <short title>` heading (or `## backend 0.9.NN —
-  ...` when only the backend version moved), then prose explaining *why*,
-  not just what.
-- `rebuid_containers.bat` (typo is original) is NOT what the hook runs —
-  that script does `docker compose build --no-cache` (reinstalls ffmpeg
-  every time, slow) and ends in `pause` (hangs forever headless). Kept only
-  for manual full rebuilds. The hook uses `docker compose up -d --build
-  backend` (cached, fast, no pause) — use that yourself too.
+- **`CHANGELOG.md` is the changelog** (`README.md` is the project/deployment
+  doc), written in Russian, newest entry first, one section per user-visible
+  change: a `## vX.Y.Z — <short title>` heading (or `## backend 0.9.NN — ...`
+  when only the backend version moved), then prose explaining *why*, not just
+  what. Git log is not a changelog — older commits are auto-generated
+  `checkpoint: <dirs> (<timestamp>)` noise from the hook that no longer runs.
+- Rebuild after backend changes: `docker compose up -d --build backend`
+  (cached, fast). `rebuid_containers.bat` (typo is original) is NOT that —
+  it does `build --no-cache` (reinstalls ffmpeg every time, slow) and ends in
+  `pause` (hangs forever headless). Kept only for manual full rebuilds.
+- Never put database dumps, `.env` copies or anything with credentials inside
+  the repo directory. `*.db` is gitignored now, but the safe habit is to keep
+  such files outside the checkout entirely.
 - `examples/` (kino.watch saved pages, used as ground-truth for real page
   layouts) is gitignored — each saved page carries a live `csrf-token`.
   Never `git add -f` it. Contents right now: `ex1/` = "Спортивные
