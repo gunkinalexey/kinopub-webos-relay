@@ -23,8 +23,16 @@ services:
       AUDIO_HLS_SEGMENT_SECONDS: ${AUDIO_HLS_SEGMENT_SECONDS:-4}
       AUDIO_HLS_START_BUCKET: ${AUDIO_HLS_START_BUCKET:-10}
       DB_PATH: /data/kp.db
+      UPDATE_DIR: /update
     volumes:
       - kp_data:/data
+      # Обмен с обновлятором, который живёт на хосте (deploy/updater.sh).
+      # Контейнер не может пересобрать сам себя - команда умрёт вместе с ним,
+      # - а давать ему docker.sock ради этого значит выдать root на хосте.
+      # Поэтому пересборкой занимается скрипт снаружи, а этот каталог нужен
+      # только чтобы обменяться двумя файлами: он пишет сюда status.json, а
+      # приложение создаёт requested, когда пользователь нажал «Обновить».
+      - ./update:/update
     restart: unless-stopped
 
   frontend:

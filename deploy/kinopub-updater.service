@@ -1,0 +1,15 @@
+[Unit]
+Description=kinopub: проверка обновлений и применение по запросу
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Каталог репозитория и ветка. Поменяйте, если развернули не в /opt/kinopub.
+Environment=REPO=/opt/kinopub
+Environment=BRANCH=main
+Environment=HEALTH=http://localhost:8080/bridge/health
+ExecStart=/opt/kinopub/deploy/updater.sh
+# Пересборка образа с нуля может занять несколько минут; таймаут с запасом,
+# иначе systemd убьёт скрипт на середине и оставит стек в промежуточном виде.
+TimeoutStartSec=900

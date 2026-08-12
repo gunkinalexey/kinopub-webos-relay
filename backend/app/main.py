@@ -35,6 +35,10 @@ MEDIA_ORIGIN = os.getenv('MEDIA_ORIGIN', '')
 IMAGE_REFERER = os.getenv('IMAGE_REFERER', 'https://kino.watch/')
 IMAGE_MAX_BYTES = int(os.getenv('IMAGE_MAX_BYTES', str(8 * 1024 * 1024)))
 AUDIO_HLS_ROOT = Path(os.getenv('AUDIO_HLS_ROOT', '/data/audio_hls'))
+# Каталог обмена с обновлятором на хосте (deploy/updater.sh). Смонтирован
+# туда же с хоста; см. комментарий в docker-compose.yml о том, почему
+# пересборкой занимается процесс снаружи контейнера.
+UPDATE_DIR = Path(os.getenv('UPDATE_DIR', '/update'))
 AUDIO_HLS_TTL = max(600, int(os.getenv('AUDIO_HLS_TTL', str(60 * 60))))
 AUDIO_HLS_SEGMENT_SECONDS = max(2, min(10, int(os.getenv('AUDIO_HLS_SEGMENT_SECONDS', '4'))))
 AUDIO_HLS_START_BUCKET = max(1, min(30, int(os.getenv('AUDIO_HLS_START_BUCKET', '10'))))
@@ -2234,6 +2238,64 @@ def health() -> Dict[str, Any]:
         # instead of offering a switch that will fail a second later.
         'ffmpeg': FFMPEG_AVAILABLE,
     }
+
+
+# --- Обновление -----------------------------------------------------------
+#
+# Приложение само себя не обновляет: пересборка убивает контейнер, из
+# которого её запустили, а выдавать ему docker.sock ради этого - это root на
+# хосте у сервиса, который проксирует контент из интернета. Поэтому вся
+# работа у скрипта на хосте (deploy/updater.sh), а здесь только два файла в
+# общем каталоге: status.json пишет скрипт, requested создаёт приложение.
+UPDATE_STATUS_FILE = 'status.json'
+UPDATE_REQUEST_FILE = 'requested'
+
+
+@app.get('/update/status')
+def update_status() -> Dict[str, Any]:
+    """Что обновлятор знает о текущей и доступной версии.
+
+    Отсутствие файла - не ошибка: значит обновлятор не установлен, и
+    интерфейс просто не покажет блок вместо того, чтобы ругаться.
+    """
+    path = UPDATE_DIR / UPDATE_STATUS_FILE
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {'available': False, 'configured': False, 'version': app.version}
+    if not isinstance(data, dict):
+        return {'available': False, 'configured': False, 'version': app.version}
+    data['configured'] = True
+    data['version'] = app.version
+    # Запрос уже подан и ещё не подобран скриптом - интерфейсу нужно знать,
+    # чтобы не предлагать нажать кнопку второй раз.
+    data['requested'] = (UPDATE_DIR / UPDATE_REQUEST_FILE).exists()
+    return data
+
+
+@app.post('/update/apply')
+def update_apply() -> Dict[str, Any]:
+    """Попросить обновлятор обновиться - созданием файла-флага.
+
+    Ответ приходит сразу: сама пересборка занимает десятки секунд и убьёт
+    этот процесс на середине, поэтому дожидаться её здесь нечем. Интерфейс
+    дальше опрашивает /health, пока приложение не поднимется заново.
+    """
+    if not UPDATE_DIR.is_dir():
+        raise HTTPException(503, 'Обновлятор не установлен')
+    status_path = UPDATE_DIR / UPDATE_STATUS_FILE
+    try:
+        status = json.loads(status_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        status = {}
+    if not (isinstance(status, dict) and status.get('available')):
+        raise HTTPException(409, 'Обновлений нет')
+    try:
+        (UPDATE_DIR / UPDATE_REQUEST_FILE).write_text(str(int(time.time())), encoding='utf-8')
+    except OSError as exc:
+        raise HTTPException(500, f'Не удалось поставить запрос: {exc}') from exc
+    log_event('update', 'Update requested', {'target': status.get('remote_sha')})
+    return {'status': 'requested', 'target': status.get('remote_sha')}
 
 
 

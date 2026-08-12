@@ -1,0 +1,15 @@
+[Unit]
+Description=kinopub: раз в 5 минут проверять обновления
+
+[Timer]
+# Первая проверка через минуту после загрузки, дальше каждые 5 минут.
+# Это только `git fetch` и сравнение хешей - обновление само по себе
+# начинается лишь тогда, когда приложение положит файл-флаг requested.
+OnBootSec=1min
+OnUnitActiveSec=5min
+# Разброс, чтобы несколько машин не ходили в GitHub одновременно.
+RandomizedDelaySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

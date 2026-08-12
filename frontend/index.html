@@ -117,6 +117,15 @@
         <label class="toggle-line"><input id="setAutoplay" type="checkbox" class="focusable"> Автопереход к следующей серии</label>
         <label class="toggle-line"><input id="setMotion" type="checkbox" class="focusable"> Уменьшить анимации</label>
         <label class="toggle-line"><input id="setHistoryFrames" type="checkbox" class="focusable"> Кадр серии вместо обложки в истории</label>
+        <fieldset class="icon-picker-field update-field">
+          <legend>Обновление</legend>
+          <div class="server-row">
+            <div id="updateInfo" class="update-info">Проверяем…</div>
+            <button id="checkUpdate" type="button" class="focusable secondary">Проверить обновления</button>
+            <button id="applyUpdate" type="button" class="focusable primary hidden">Обновить</button>
+          </div>
+          <span class="subtitle-hint">Обновление забирает изменения из репозитория и применяет только необходимое: правки интерфейса подхватываются сразу и без перерыва, бэкенд пересобирается лишь когда менялся он — тогда сервис будет недоступен около минуты. Если новая версия не поднимется, произойдёт автоматический откат на прежнюю.</span>
+        </fieldset>
         <fieldset class="icon-picker-field server-field">
           <legend>Сервер раздачи</legend>
           <div class="server-row">

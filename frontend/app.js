@@ -1,5 +1,5 @@
 (function(){'use strict';
-var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:imageCacheVersion(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,watchingView:'new',watchingItems:null,watchingAllItems:null,similarToken:0,serverFfmpeg:null,bookmarkFolders:null,bookmarkFolder:null,collectionSort:'new',collectionId:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,serverOptions:[],serverSelected:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
+var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:imageCacheVersion(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,watchingView:'new',watchingItems:null,watchingAllItems:null,similarToken:0,serverFfmpeg:null,bookmarkFolders:null,bookmarkFolder:null,collectionSort:'new',collectionId:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,serverOptions:[],serverSelected:null,updateStatus:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
 var $=function(id){return document.getElementById(id);},video=$('video');
 // Every backend call that needs a session (catalog, history, profile, item
 // details...) raises a real HTTP 401 the moment the cookie is gone or
@@ -939,7 +939,7 @@ function applyHash(){
 function route(name,subId){var before=document.activeElement;if(name==='settings'){state.route=name;showScreen('settingsScreen');loadSettings();
  // Only here, not inside loadSettings(): that also runs on every launch, and
  // the server list costs a real v1/device/info round-trip upstream.
- loadServers();}else{resetNavigationState(name);state.route=name;if(subId){if(name==='bookmarks')state.bookmarkFolder=subId;else if(name==='collections')state.collectionId=subId;}showScreen('catalogScreen');renderCatalog();}var links=document.querySelectorAll('[data-route]');for(var i=0;i<links.length;i++)links[i].classList.toggle('active',links[i].getAttribute('data-route')===name || (name==='new'&&links[i].getAttribute('data-route')==='popular'));setTimeout(function(){var target=routeFocusTarget(name,before);if(target)try{target.focus();}catch(e){}},20);pushHash(subId?encodeRouteHash(name)+'/'+encodeURIComponent(subId):encodeRouteHash(name));}
+ loadServers();loadUpdateStatus();}else{resetNavigationState(name);state.route=name;if(subId){if(name==='bookmarks')state.bookmarkFolder=subId;else if(name==='collections')state.collectionId=subId;}showScreen('catalogScreen');renderCatalog();}var links=document.querySelectorAll('[data-route]');for(var i=0;i<links.length;i++)links[i].classList.toggle('active',links[i].getAttribute('data-route')===name || (name==='new'&&links[i].getAttribute('data-route')==='popular'));setTimeout(function(){var target=routeFocusTarget(name,before);if(target)try{target.focus();}catch(e){}},20);pushHash(subId?encodeRouteHash(name)+'/'+encodeURIComponent(subId):encodeRouteHash(name));}
 function detailsMediaList(item){if(item.seasons&&item.seasons.length){var all=[];for(var s=0;s<item.seasons.length;s++)all=all.concat(item.seasons[s].episodes||[]);return all;}return item.media||[];}
 function detailsTrackList(item,field){var media=detailsMediaList(item),seen={},out=[];for(var i=0;i<media.length;i++){var list=media[i][field]||[];for(var j=0;j<list.length;j++){var label=field==='audios'?detailedAudioLabel(list[j],out.length,false):detailedSubtitleLabel(list[j],out.length,false);var body=label.replace(/^\d+\.\s*/,'');if(body&&!seen[body]){seen[body]=true;out.push(body);}}}return out;}
 // Movie vs series duration is not a UI choice, it is forced by what KinoPub's
@@ -2036,6 +2036,59 @@ function initializeAuthenticatedApp(){state.authenticated=true;setAuthLocked(fal
  // subscription modal (refreshSubscription -> loadProfile(true)) is the
  // one place that still should, and still does.
  loadProfile(false);loadWatchedStatuses();loadWatchingCount();}
+// --- Обновление (Настройки) -----------------------------------------------
+// Само обновление делает скрипт на хосте; здесь только показ состояния и
+// кнопка, ставящая ему задачу. Подробности - в deploy/updater.sh.
+function renderUpdate(data){
+ var info=$('updateInfo'),apply=$('applyUpdate'),check=$('checkUpdate');
+ if(!info)return;
+ info.className='update-info';
+ if(!data||!data.configured){info.textContent='Автообновление не настроено (версия '+((data&&data.version)||'?')+')';if(apply)apply.classList.add('hidden');return;}
+ var cur=data.current_sha?'<span class="update-sha">'+esc(data.current_sha)+'</span>':'';
+ if(data.state==='updating'){info.textContent=data.message||'Обновляемся…';if(apply)apply.classList.add('hidden');if(check)check.disabled=true;return;}
+ if(check)check.disabled=false;
+ if(data.state==='failed'){info.classList.add('update-failed');info.innerHTML=esc(data.message||'Обновление не удалось')+' · '+cur;if(apply)apply.classList.toggle('hidden',!data.available);return;}
+ if(data.available){
+  info.classList.add('has-update');
+  var n=Number(data.behind)||0;
+  info.innerHTML='Доступна новая версия: '+esc(plural(n,'коммит','коммита','коммитов'))+'<br>'+esc(data.remote_subject||'')+' · <span class="update-sha">'+esc(data.remote_sha||'')+'</span>';
+  if(apply)apply.classList.remove('hidden');
+ }else{
+  info.innerHTML='Установлена последняя версия · '+cur;
+  if(apply)apply.classList.add('hidden');
+ }
+}
+function loadUpdateStatus(){var info=$('updateInfo');if(info&&!info.textContent)info.textContent='Проверяем…';return KPApi.updateStatus().then(function(d){state.updateStatus=d;renderUpdate(d);return d;}).catch(function(){renderUpdate(null);return null;});}
+// После запроса приложение перезапускается, и опрашивать /update/status
+// бессмысленно - он умрёт вместе с бэкендом. Поэтому ждём, пока /health
+// снова начнёт отвечать, и только затем перечитываем состояние.
+function waitForRestart(tries){
+ var left=tries||60,info=$('updateInfo');
+ function tick(){
+  KPApi.health().then(function(){
+   loadUpdateStatus().then(function(d){
+    if(d&&d.state==='updating'&&left-->0){setTimeout(tick,2000);return;}
+    var check=$('checkUpdate');if(check)check.disabled=false;
+   });
+  }).catch(function(){
+   if(left-->0){setTimeout(tick,2000);}
+   else{if(info){info.className='update-info update-failed';info.textContent='Сервис не поднялся за отведённое время — проверьте логи на хосте';}}
+  });
+ }
+ setTimeout(tick,3000);
+}
+function applyUpdate(){
+ var btn=$('applyUpdate'),check=$('checkUpdate'),info=$('updateInfo');
+ if(!btn||btn.disabled)return;
+ btn.disabled=true;if(check)check.disabled=true;
+ btn.classList.add('hidden');
+ if(info){info.className='update-info';info.textContent='Запрошено обновление, ждём…';}
+ KPApi.applyUpdate().then(function(){waitForRestart(90);}).catch(function(err){
+  btn.disabled=false;
+  if(info){info.className='update-info update-failed';info.textContent='Не удалось запросить: '+(err&&err.message?err.message:String(err));}
+ });
+}
+
 // --- CDN server picker (Настройки) ---------------------------------------
 // The selected region lives on KinoPub's own device record, not in this
 // bridge's settings table, so it is never part of the "Сохранить" payload:
@@ -2123,6 +2176,8 @@ var links=document.querySelectorAll('[data-route]');for(var i=0;i<links.length;i
 var iconRadios=document.querySelectorAll('input[name="appIcon"]');for(var ir=0;ir<iconRadios.length;ir++)iconRadios[ir].onchange=function(){applyBranding(this.value);};
 $('setServer').onchange=function(){var id=parseInt(this.value,10);if(isFinite(id)&&id!==state.serverSelected)applyServerChoice(id);};
 $('measureServers').onclick=measureServers;
+$('checkUpdate').onclick=function(){loadUpdateStatus();};
+$('applyUpdate').onclick=applyUpdate;
 $('searchGo').onclick=function(){doSearch();};$('searchInput').oninput=requestSuggestions;$('searchInput').onfocus=requestSuggestions;$('searchInput').onkeydown=function(e){var k=e.keyCode;if(k===40&&!$('searchSuggestions').classList.contains('hidden')){e.preventDefault();e.stopPropagation();setSuggestionIndex(state.suggestionIndex+1);return;}if(k===38&&!$('searchSuggestions').classList.contains('hidden')){e.preventDefault();e.stopPropagation();setSuggestionIndex(state.suggestionIndex-1);return;}if(k===27){e.stopPropagation();hideSuggestions();return;}if(k===13){e.preventDefault();e.stopPropagation();var rows=suggestionRows();if(state.suggestionIndex>=0&&state.currentSuggestions[state.suggestionIndex]){openSuggestion(state.currentSuggestions[state.suggestionIndex]);return;}var value=$('searchInput').value.trim(),exact=null;for(var si=0;si<state.currentSuggestions.length;si++){if((state.currentSuggestions[si].value||'').trim()===value){exact=state.currentSuggestions[si];break;}}if(exact){openSuggestion(exact);}else doSearch();}};var searchModes=document.querySelectorAll('[data-search-mode]');for(var sm=0;sm<searchModes.length;sm++)searchModes[sm].onclick=(function(mode){return function(){state.searchMode=mode;doSearch(mode);};}(searchModes[sm].getAttribute('data-search-mode')));document.addEventListener('click',function(e){if(!$('searchHead').contains(e.target))hideSuggestions();});$('loginButton').onclick=function(){if(!state.authenticated)showAuthGate();};$('authStart').onclick=startAuth;$('subscriptionChip').onclick=openSubscription;$('subscriptionClose').onclick=closeSubscription;$('subscriptionRefresh').onclick=refreshSubscription;$('authClose').onclick=closeAuth;$('authRestart').onclick=startAuth;$('detailsClose').onclick=function(){history.back();};
 // One delegated listener for every genre/country/year/director/actor badge
 // in the info table, since it is all built as one innerHTML string (see
