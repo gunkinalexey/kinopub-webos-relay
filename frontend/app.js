@@ -2040,22 +2040,31 @@ function initializeAuthenticatedApp(){state.authenticated=true;setAuthLocked(fal
 // --- Обновление (Настройки) -----------------------------------------------
 // Само обновление делает скрипт на хосте; здесь только показ состояния и
 // кнопка, ставящая ему задачу. Подробности - в deploy/updater.sh.
+// Дата+время, не только дата (в отличие от subscriptionDate): обновления
+// внутри одного дня - обычное дело при активной разработке, и без времени
+// "последнее обновление: сегодня" не отличить от "пять минут назад".
+function updateDateTime(ts){if(!ts)return '';try{return new Date(Number(ts)*1000).toLocaleString('ru-RU',{day:'2-digit',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'});}catch(e){return '';}}
 function renderUpdate(data){
  var info=$('updateInfo'),apply=$('applyUpdate'),check=$('checkUpdate');
  if(!info)return;
  info.className='update-info';
  if(!data||!data.configured){info.textContent='Автообновление не настроено (версия '+((data&&data.version)||'?')+')';if(apply)apply.classList.add('hidden');return;}
  var cur=data.current_sha?'<span class="update-sha">'+esc(data.current_sha)+'</span>':'';
+ // Показывается почти всегда - и когда обновлений нет, и когда есть, и при
+ // ошибке - единственное место, где "последнее обновление" вообще видно.
+ var appliedLine=data.last_applied_at?'<div class="update-meta">Последнее обновление: '+esc(updateDateTime(data.last_applied_at))+'</div>':'';
  if(data.state==='updating'){info.textContent=data.message||'Обновляемся…';if(apply)apply.classList.add('hidden');if(check)check.disabled=true;return;}
  if(check)check.disabled=false;
- if(data.state==='failed'){info.classList.add('update-failed');info.innerHTML=esc(data.message||'Обновление не удалось')+' · '+cur;if(apply)apply.classList.toggle('hidden',!data.available);return;}
+ if(data.state==='failed'){info.classList.add('update-failed');info.innerHTML=esc(data.message||'Обновление не удалось')+' · '+cur+appliedLine;if(apply)apply.classList.toggle('hidden',!data.available);return;}
  if(data.available){
   info.classList.add('has-update');
-  var n=Number(data.behind)||0;
-  info.innerHTML='Доступна новая версия: '+esc(plural(n,'коммит','коммита','коммитов'))+'<br>'+esc(data.remote_subject||'')+' · <span class="update-sha">'+esc(data.remote_sha||'')+'</span>';
+  var n=Number(data.behind)||0,remoteDate=updateDateTime(data.remote_committed_at);
+  info.innerHTML='Доступна новая версия: '+esc(plural(n,'коммит','коммита','коммитов'))+
+   (remoteDate?' <span class="update-meta">(от '+esc(remoteDate)+')</span>':'')+
+   '<br>'+esc(data.remote_subject||'')+' · <span class="update-sha">'+esc(data.remote_sha||'')+'</span>'+appliedLine;
   if(apply)apply.classList.remove('hidden');
  }else{
-  info.innerHTML='Установлена последняя версия · '+cur;
+  info.innerHTML='Установлена последняя версия · '+cur+appliedLine;
   if(apply)apply.classList.add('hidden');
  }
 }

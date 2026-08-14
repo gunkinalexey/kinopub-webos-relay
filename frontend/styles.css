@@ -64,6 +64,8 @@ body[data-app-brand="kinoterk"] .brand-block:hover .brand-logo-preview{opacity:1
 .update-info .update-sha{color:#8f98aa;font-family:monospace}
 .update-info.has-update{color:#4fd99a}
 .update-info.update-failed{color:#e8807c}
+.update-info .update-meta{color:#8f98aa;font-weight:400}
+.update-info div.update-meta{margin-top:4px;font-size:12px}
 .app-icon-picker{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:12px}
 .app-icon-option{position:relative;display:flex!important;flex-direction:column!important;align-items:center;justify-content:center;gap:8px!important;padding:12px;border:2px solid #30394d;border-radius:8px;background:#151b28;color:#cbd2df;text-align:center}
 .app-icon-option input{position:absolute;opacity:0;pointer-events:none}

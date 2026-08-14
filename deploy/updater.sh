@@ -22,6 +22,12 @@ BRANCH="${BRANCH:-main}"
 UPDATE_DIR="$REPO/update"
 STATUS="$UPDATE_DIR/status.json"
 REQUEST="$UPDATE_DIR/requested"
+# Когда этот экземпляр в последний раз реально сменил версию - отдельный
+# файл, не commit-дата: деплой обычно отстаёт от коммита на время до
+# следующего тика таймера, и это два разных факта. Переживает перезапуски
+# скрипта, потому что status.json перезаписывается целиком при каждом
+# прогоне, а этот файл трогается только при фактическом обновлении.
+APPLIED_AT_FILE="$UPDATE_DIR/last_applied_at"
 HEALTH="${HEALTH:-http://localhost:8080/bridge/health}"
 HEALTH_TRIES="${HEALTH_TRIES:-30}"
 
@@ -35,13 +41,19 @@ json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/ /g' | tr -
 
 write_status() {
   local state="$1" message="$2"
-  local cur_sha cur_subject rem_sha rem_subject behind available
+  local cur_sha cur_subject cur_date rem_sha rem_subject rem_date behind available applied_at
   cur_sha=$(git rev-parse --short HEAD 2>/dev/null || echo '')
   cur_subject=$(git log -1 --format=%s 2>/dev/null || echo '')
+  # Unix-время коммита (%ct), не автора (%at): при ребейзах/каналах доставки
+  # это то, что реально совпадает с порядком в git log --reverse, который
+  # плечо plan_actions() использует для diff между before/after.
+  cur_date=$(git log -1 --format=%ct 2>/dev/null || echo '')
   rem_sha=$(git rev-parse --short "origin/$BRANCH" 2>/dev/null || echo '')
   rem_subject=$(git log -1 --format=%s "origin/$BRANCH" 2>/dev/null || echo '')
+  rem_date=$(git log -1 --format=%ct "origin/$BRANCH" 2>/dev/null || echo '')
   behind=$(git rev-list --count "HEAD..origin/$BRANCH" 2>/dev/null || echo 0)
   if [ "${behind:-0}" -gt 0 ]; then available=true; else available=false; fi
+  applied_at=$(cat "$APPLIED_AT_FILE" 2>/dev/null || echo '')
 
   cat > "$STATUS" <<EOF
 {
@@ -53,8 +65,11 @@ write_status() {
   "branch": "$(json_escape "$BRANCH")",
   "current_sha": "$(json_escape "$cur_sha")",
   "current_subject": "$(json_escape "$cur_subject")",
+  "current_committed_at": ${cur_date:-null},
   "remote_sha": "$(json_escape "$rem_sha")",
-  "remote_subject": "$(json_escape "$rem_subject")"
+  "remote_subject": "$(json_escape "$rem_subject")",
+  "remote_committed_at": ${rem_date:-null},
+  "last_applied_at": ${applied_at:-null}
 }
 EOF
 }
@@ -120,7 +135,10 @@ do_update() {
     write_status updating "Перезапускаем контейнеры"
     docker compose up -d >/dev/null 2>&1
   else
-    # Менялся только фронтенд или документация - применять нечего.
+    # Менялся только фронтенд или документация - применять нечего, но
+    # версия всё равно сменилась, так что last_applied_at обновляется и
+    # здесь, а не только на пути с пересборкой.
+    date +%s > "$APPLIED_AT_FILE"
     write_status idle "Обновлено без перезапуска"
     log "frontend/docs only, nothing to restart"
     return 0
@@ -139,6 +157,7 @@ do_update() {
     return 1
   fi
 
+  date +%s > "$APPLIED_AT_FILE"
   write_status idle "Обновлено"
   log "updated $before -> $after"
 }
