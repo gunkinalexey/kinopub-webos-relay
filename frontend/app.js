@@ -860,32 +860,23 @@ function renderCatalog(){
  if(cfg.mode==='bookmarks'){renderBookmarks(cfg);return;}
  if(cfg.mode==='collections'){renderCollections(cfg);return;}
  renderTop();
- var g=$('catalogGrid'),page=currentCatalogPage(cfg);
+ // Каталог/фильтры намеренно ограничены первой страницей - page захардкожен
+ // в 0 (не через currentCatalogPage/setCatalogPage: та машина остаётся
+ // рабочей для Истории/Закладок/Подборок, которые пагинацию сохраняют), а
+ // meta.total_pages принудительно 1, отчего renderPagination() естественно
+ // прячет бар через свою же "singlePage" логику - без правки самой функции.
+ var g=$('catalogGrid'),page=0;
  g.className='poster-grid';
  var perpage=catalogPerPage(),cacheKey=catalogPageKey(cfg)+':'+page+':'+perpage;
  g.innerHTML='<p class="empty-state">Загрузка раздела…</p>';$('catalogPagination').classList.add('hidden');
- var filters=currentFilters(cfg),filtered=!!activeFilterCount(cfg);
- var cached=state.catalogCache[cacheKey];
- // /catalog/page-count (used by discoverTotalPages) isn't filter-aware - it
- // would probe the unfiltered section and could overwrite a correct
- // filtered total with an unrelated one. Not needed anyway: `feed=all`
- // (the only feed filters apply to, `v1/items` under the hood) already
- // returns a reliable pagination.total on every request, unlike the
- // shortcut feeds discoverTotalPages exists for.
- if(cached){renderCatalogItems(cached.items);renderPagination(cached.meta,cached.items.length);if(!filtered&&(page===0||!cached.meta.total_pages||cached.meta.total_pages<=1))discoverTotalPages(cfg,cached.meta,cached.items.length);return;}
+ var filters=currentFilters(cfg),cached=state.catalogCache[cacheKey];
+ if(cached){renderCatalogItems(cached.items);renderPagination(cached.meta,cached.items.length);return;}
  var requestId=++state.catalogRequest;
  KPApi.catalog(cfg.section,cfg.feed,page,state.cacheVersion,perpage,filters).then(function(data){
    if(requestId!==state.catalogRequest)return;
-   var items=(data&&data.items)||[],meta={page:data&&data.page||0,total_pages:data&&data.total_pages||0,total_items:data&&data.total_items||0,has_next:!!(data&&data.has_next),perpage:perpage};
-   var totalKey=catalogPageKey(cfg),reached=(parseInt(meta.page,10)||0)+1;
-   if(reached>1&&reached>(state.catalogTotals[totalKey]||0))state.catalogTotals[totalKey]=reached;
-   meta.total_pages=Math.max(meta.total_pages||0,state.catalogTotals[totalKey]||0);
+   var items=(data&&data.items)||[],meta={page:0,total_pages:1,total_items:data&&data.total_items||0,has_next:false,perpage:perpage};
    state.catalogCache[cacheKey]={items:items,meta:meta};
    renderCatalogItems(items);renderPagination(meta,items.length);
-   if(!filtered){
-    if(page===0||!meta.total_pages||meta.total_pages<=1)discoverTotalPages(cfg,meta,items.length,false);
-    else if(items.length>=perpage&&meta.total_pages&&reached>=meta.total_pages)discoverTotalPages(cfg,meta,items.length,true);
-   }
  }).catch(function(err){
    if(requestId!==state.catalogRequest)return;
    g.innerHTML='<p class="empty-state">Не удалось загрузить раздел: '+esc(err&&err.message?err.message:String(err))+'</p>';$('catalogPagination').classList.add('hidden');
@@ -908,12 +899,22 @@ function visibleScreen(){for(var i=0;i<SCREENS.length;i++)if(!$(SCREENS[i]).clas
 // let a single hashchange handler re-derive the screen from whatever hash
 // is showing (including the one already in the address bar on first load).
 var applyingHistoryState=false;
+// route()/doSearch()/openDetails() render synchronously, THEN call pushHash()
+// to record the move in history. Setting location.hash is itself a real
+// navigation, so it fires 'hashchange' a tick later - and without this guard
+// the hashchange handler ran applyHash() -> route() a second time for a hash
+// we had literally just finished rendering, doubling every catalogue fetch
+// on every section switch (confirmed live: two identical /catalog/list
+// requests back to back). lastSelfHash names the one hash change that was
+// self-inflicted and already rendered; the hashchange handler consumes it
+// once and renders normally for anything else, including real back/forward.
+var lastSelfHash=null;
 function encodeRouteHash(name){return 'route/'+encodeURIComponent(name);}
 function encodeDetailsHash(id){return 'details/'+encodeURIComponent(id);}
 function encodeSearchHash(mode,query){return 'search/'+encodeURIComponent(mode||'all')+'/'+encodeURIComponent(query||'');}
 // Guarded against a missing `location`/`history` (the test harnesses stub a
 // bare `window` with no real navigation), not just a browser quirk.
-function pushHash(hash){if(applyingHistoryState||typeof location==='undefined')return;if(location.hash.replace(/^#/,'')===hash)return;location.hash=hash;}
+function pushHash(hash){if(applyingHistoryState||typeof location==='undefined')return;lastSelfHash=hash;if(location.hash.replace(/^#/,'')===hash)return;location.hash=hash;}
 function parseHash(){var raw=typeof location!=='undefined'?String(location.hash||''):'';raw=raw.replace(/^#/,'');var parts=raw.split('/');return {type:parts[0]||'',a:parts[1]!==undefined?decodeURIComponent(parts[1]):'',b:parts[2]!==undefined?decodeURIComponent(parts[2]):''};}
 function applyHash(){
  applyingHistoryState=true;
@@ -2215,7 +2216,7 @@ $('timeline').onclick=function(e){e.stopPropagation();seekFromTimelineEvent(e);}
 $('timeline').onkeydown=function(e){if(e.keyCode===37||e.keyCode===39){e.preventDefault();e.stopPropagation();var step=Math.max(5,(logicalDuration()||0)*0.01);seekLogical(logicalCurrentTime()+(e.keyCode===37?-step:step));}};
 $('togglePlay').onclick=function(e){e.stopPropagation();toggleVideoPlayback(false);showPlayerControls();};$('rewind').onclick=function(){seekLogical(logicalCurrentTime()-10);showPlayerControls();};$('forward').onclick=function(){seekLogical(logicalCurrentTime()+10);showPlayerControls();};$('nativeFullscreen').onclick=function(e){e.stopPropagation();toggleNativeFullscreen();showPlayerControls();};$('playerStreamMode').onchange=function(e){e.stopPropagation();switchStreamMode(this.value);showPlayerControls();};$('playerQuality').onchange=function(e){e.stopPropagation();switchQuality(this.value);showPlayerControls();};$('playerSubtitles').onchange=function(e){e.stopPropagation();applySubtitleChoice(this.value);showPlayerControls();};$('playerSubtitleSize').onchange=function(e){e.stopPropagation();var size=applySubtitleSize(this.value);showPlayerControls();var next={};for(var k in state.settings)if(state.settings.hasOwnProperty(k))next[k]=state.settings[k];next.subtitle_size=size;KPApi.saveSettings(next).catch(function(){});};$('playerAudio').onchange=function(e){e.stopPropagation();applyAudioChoice(this.value);showPlayerControls();};$('closePlayer').onclick=closePlayer;$('playerCloseX').onclick=function(e){e.stopPropagation();closePlayer();};$('playerLayer').onmousemove=showPlayerControls;$('playerLayer').onmouseenter=showPlayerControls;function refreshNativeTracks(){populateAudioMenu();populateSubtitleMenu();reapplyAudioSelection();applySubtitleChoice(state.playerSubtitleChoice);}video.addEventListener('loadedmetadata',refreshNativeTracks);video.addEventListener('loadeddata',refreshNativeTracks);video.addEventListener('canplay',refreshNativeTracks);if(video.audioTracks){video.audioTracks.onaddtrack=refreshNativeTracks;video.audioTracks.onchange=function(){populateAudioMenu();};}if(video.textTracks){video.textTracks.onaddtrack=refreshNativeTracks;video.textTracks.onchange=function(){populateSubtitleMenu();};}video.addEventListener('play',showPlayerControls);video.addEventListener('pause',keepPlayerControlsVisible);video.addEventListener('ended',keepPlayerControlsVisible);video.addEventListener('playing',clearDirectStallWatch);
 document.addEventListener('fullscreenchange',function(){keepPlayerControlsVisible();updateFullscreenButton();});document.addEventListener('webkitfullscreenchange',function(){keepPlayerControlsVisible();updateFullscreenButton();});
-if(typeof window!=='undefined'&&window.addEventListener)window.addEventListener('hashchange',applyHash);
+if(typeof window!=='undefined'&&window.addEventListener)window.addEventListener('hashchange',function(){var raw=typeof location!=='undefined'?location.hash.replace(/^#/,''):'';var self=raw===lastSelfHash;lastSelfHash=null;if(!self)applyHash();});
 // The sidebar has its own overflow:auto (its nav list can outgrow the
 // window on a short screen), so a wheel scroll started over it scrolled the
 // sidebar instead of the content the user is actually looking at. Redirect
