@@ -201,7 +201,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.101', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.102', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -219,6 +219,13 @@ class DebugEvent(BaseModel):
     kind: str = 'frontend'
     message: str
     details: Optional[Dict[str, Any]] = None
+
+
+class PresencePayload(BaseModel):
+    """What the page says about itself on each heartbeat."""
+    playing: bool = False
+    title: str = ''
+    mode: str = ''
 
 
 class SettingsPayload(BaseModel):
@@ -374,7 +381,7 @@ async def refresh_if_needed(sid: str, session: Dict[str, Any]) -> Dict[str, Any]
         return current
 
 
-async def current_session(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def current_session(request: Request, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
     """The live session for this request, refreshed if the clock says so.
 
     Every authenticated handler opened with the same two calls spelled out by
@@ -382,8 +389,141 @@ async def current_session(kp_session: Optional[str] = Cookie(default=None)) -> D
     down a new handler, and the 401 for "no cookie" or "dead session" comes
     from one place instead of thirty-four. The returned row carries its own
     ``sid``, so handlers that need the session id do not also need the cookie.
+
+    It is also the one place every authenticated request passes through, which
+    is what makes the presence registry below cost nothing to feed.
     """
-    return await refresh_if_needed(kp_session or '', session_get(kp_session))
+    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    presence_touch(session.get('sid'), request)
+    return session
+
+
+# ---------------------------------------------------------------- presence --
+# "How many clients are using this right now" cannot be read off the sessions
+# table: a row is written per *authorisation*, survives 45 days, and the live
+# database holds twenty of them for a household with two devices. Presence is
+# a different question and is answered from live traffic instead, in memory,
+# because "right now" has nothing to persist.
+#
+# Two feeds, because neither alone is honest:
+#   - every authenticated request (via the dependency above), which covers
+#     browsing and any playback relayed through /stream or /hls;
+#   - an explicit ping from the page, which is the only way to see a tab that
+#     is merely open (nothing else polls more than once every six hours) or a
+#     `direct` stream, where the TV talks to the CDN and never to us.
+PRESENCE_ONLINE_TTL = 90
+PRESENCE_WATCHING_TTL = 45
+PRESENCE_FORGET_AFTER = 6 * 60 * 60
+presence: Dict[str, Dict[str, Any]] = {}
+
+
+def _device_name(agent: str) -> str:
+    """A readable device label. The TV is the point of this project, so it is
+    named specifically; everything else only needs to be distinguishable."""
+    low = (agent or '').lower()
+    if 'web0s' in low or 'webos' in low:
+        return 'LG webOS TV'
+    if 'smart-tv' in low or 'smarttv' in low or 'tizen' in low:
+        return 'Smart TV'
+    if 'android' in low:
+        return 'Android'
+    if 'iphone' in low or 'ipad' in low or 'ios' in low:
+        return 'iOS'
+    if 'windows' in low:
+        return 'Windows'
+    if 'macintosh' in low or 'mac os' in low:
+        return 'macOS'
+    if 'linux' in low:
+        return 'Linux'
+    return 'неизвестное устройство'
+
+
+def _client_ip(request: Request) -> str:
+    """The address of the actual client, not of the proxy in front of it.
+
+    Every request arrives through nginx (and on the deployed box through Caddy
+    in front of it), so `request.client` is always a container address -
+    verified live, it read 172.22.0.2 for every device alike. The first entry
+    of X-Forwarded-For is the original client; X-Real-IP is the fallback when
+    only one proxy is in the chain.
+
+    On Windows this still bottoms out at the Docker gateway (172.22.0.1),
+    because Docker Desktop NATs the published port before nginx ever sees the
+    connection - there is no header that can recover what was already lost.
+    The deployed Linux stack does not have that problem.
+    """
+    forwarded = request.headers.get('x-forwarded-for', '')
+    if forwarded:
+        return forwarded.split(',')[0].strip()[:45]
+    real = request.headers.get('x-real-ip', '')
+    if real:
+        return real.strip()[:45]
+    return request.client.host if request.client else ''
+
+
+def presence_touch(sid: Optional[str], request: Optional[Request] = None,
+                   playing: Optional[bool] = None, title: str = '', mode: str = '') -> None:
+    if not sid:
+        return
+    now = time.time()
+    entry = presence.get(sid)
+    if entry is None:
+        entry = presence[sid] = {'first_seen': now, 'requests': 0, 'last_playing': 0.0,
+                                 'title': '', 'mode': '', 'ip': '', 'agent': ''}
+    entry['last_seen'] = now
+    entry['requests'] += 1
+    if request is not None:
+        entry['ip'] = _client_ip(request)
+        entry['agent'] = request.headers.get('user-agent', '')[:250]
+    if playing:
+        entry['last_playing'] = now
+        if title:
+            entry['title'] = title[:120]
+        if mode:
+            entry['mode'] = mode[:20]
+    elif playing is False:
+        # An explicit "not playing" ends the session immediately instead of
+        # letting it fade out over the watching TTL - the player was closed.
+        entry['last_playing'] = 0.0
+        entry['title'] = ''
+
+
+def presence_snapshot() -> Dict[str, Any]:
+    now = time.time()
+    for sid in [s for s, e in presence.items() if now - e['last_seen'] > PRESENCE_FORGET_AFTER]:
+        presence.pop(sid, None)
+    clients = []
+    for sid, entry in presence.items():
+        idle = now - entry['last_seen']
+        if idle > PRESENCE_ONLINE_TTL:
+            continue
+        watching = (now - entry['last_playing']) <= PRESENCE_WATCHING_TTL
+        clients.append({
+            # Enough of the session id to tell two devices apart in the answer,
+            # not enough to be a usable cookie if this ever leaks into a log.
+            'id': sid[:8],
+            'device': _device_name(entry['agent']),
+            'ip': entry['ip'],
+            'watching': watching,
+            'title': entry['title'] if watching else '',
+            'mode': entry['mode'] if watching else '',
+            'idle_seconds': round(idle, 1),
+            'online_seconds': round(now - entry['first_seen'], 1),
+            'requests': entry['requests'],
+        })
+    clients.sort(key=lambda c: (not c['watching'], c['idle_seconds']))
+    with db_connect() as conn:
+        stored = conn.execute('SELECT COUNT(*) AS n FROM sessions').fetchone()['n']
+    return {
+        'clients_online': len(clients),
+        'watching': sum(1 for c in clients if c['watching']),
+        'clients': clients,
+        # Deliberately reported next to the live count: the difference between
+        # the two is the whole reason this endpoint exists.
+        'sessions_stored': stored,
+        'online_ttl': PRESENCE_ONLINE_TTL,
+        'watching_ttl': PRESENCE_WATCHING_TTL,
+    }
 
 
 
@@ -2725,6 +2865,7 @@ def logout(response: Response, kp_session: Optional[str] = Cookie(default=None))
         # and the cached answers outlive the session that owned them, for as
         # long as the process runs.
         _refresh_locks.pop(kp_session, None)
+        presence.pop(kp_session, None)
         profile_cache.pop(kp_session, None)
         watched_statuses_cache.pop(kp_session, None)
     response.delete_cookie('kp_session', path='/')
@@ -3166,6 +3307,7 @@ async def media_audio_variants(url: str, request: Request, session: Dict[str, An
 
 @app.get('/hls')
 async def hls(url: str, request: Request, session: Dict[str, Any] = Depends(current_session)):
+    presence_touch(session.get('sid'), request, playing=True, mode='hls')
     upstream, final_url = await open_media(url, media_headers(session, request))
     try:
         if upstream.status_code >= 400:
@@ -3565,6 +3707,8 @@ async def audio_hls_file(job_id: str, filename: str, kp_session: Optional[str] =
         raise HTTPException(404, 'Audio HLS job not found')
     if Path(filename).name != filename or filename.startswith('.'):
         raise HTTPException(400, 'Invalid HLS file name')
+    # A locally remuxed track is still playback, and it never passes /stream.
+    presence_touch(kp_session, playing=True, mode='audio-hls')
     if filename != 'index.m3u8' and not filename.startswith('segment_'):
         raise HTTPException(404, 'HLS file not found')
     path = job['dir'] / filename
@@ -3578,6 +3722,7 @@ async def audio_hls_file(job_id: str, filename: str, kp_session: Optional[str] =
 
 @app.get('/stream')
 async def stream(url: str, request: Request, session: Dict[str, Any] = Depends(current_session)):
+    presence_touch(session.get('sid'), request, playing=True, mode='relay/hls')
     upstream, final_url = await open_media(url, media_headers(session, request))
     if upstream.status_code >= 400:
         await upstream.aclose()
@@ -3618,6 +3763,27 @@ async def stream(url: str, request: Request, session: Dict[str, Any] = Depends(c
                     'url': final_url, 'sent': sent, 'declared': declared, 'outcome': outcome})
 
     return StreamingResponse(iterator(), status_code=upstream.status_code, headers=headers)
+
+
+@app.post('/presence/ping')
+async def presence_ping(payload: PresencePayload, request: Request,
+                        session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
+    """Heartbeat from an open page.
+
+    The dependency has already recorded that this client is alive; this adds
+    the one thing the backend cannot observe on its own - whether the player
+    is running. In `direct` mode the video never touches this process, so
+    without the ping a watching TV looks exactly like an idle tab.
+    """
+    presence_touch(session.get('sid'), request, playing=payload.playing,
+                   title=payload.title, mode=payload.mode)
+    return {'status': 'ok', 'online_ttl': PRESENCE_ONLINE_TTL}
+
+
+@app.get('/presence')
+async def presence_state(session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
+    """Who is using this bridge right now."""
+    return presence_snapshot()
 
 
 @app.post('/debug/events')

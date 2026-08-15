@@ -245,5 +245,58 @@ with TestClient(app, raise_server_exceptions=False) as client:
     finally:
         main_mod.kino_get = real_kino_get
 
+    # Presence: how many clients are using the bridge *now*. The sessions table
+    # cannot answer that - it holds a row per authorisation for 45 days - so
+    # the count comes from live traffic plus a heartbeat, and these checks pin
+    # down that the two never get confused for one another.
+    main_mod.presence.clear()
+    r = client.get('/presence')
+    # `cookies={}` on a request does not clear the client's jar - it merges
+    # with it - so the only honest way to ask anonymously is to empty the jar.
+    saved_jar = dict(client.cookies)
+    client.cookies.clear()
+    check('/presence needs a session', client.get('/presence').status_code == 401,
+          client.get('/presence').status_code)
+    for name, value in saved_jar.items():
+        client.cookies.set(name, value)
+    body = r.json()
+    check('the request that asked is itself a live client', body['clients_online'] == 1, body)
+    check('and it is not watching anything', body['watching'] == 0, body)
+    check('stored sessions are reported separately from live clients',
+          body['sessions_stored'] >= 1 and 'clients_online' in body, body)
+    check('the client is identified without exposing the whole session id',
+          len(body['clients'][0]['id']) == 8 and body['clients'][0]['id'] != SID,
+          body['clients'][0]['id'])
+
+    client.post('/presence/ping', json={'playing': True, 'title': 'Тед Лассо', 'mode': 'hls'})
+    body = client.get('/presence').json()
+    check('a heartbeat that says "playing" makes the client a viewer',
+          body['watching'] == 1 and body['clients'][0]['title'] == 'Тед Лассо', body['clients'])
+
+    client.post('/presence/ping', json={'playing': False})
+    body = client.get('/presence').json()
+    check('and closing the player drops it immediately, not after the TTL',
+          body['watching'] == 0 and body['clients_online'] == 1, body)
+
+    # Relayed playback counts on its own, without any heartbeat: the fragments
+    # pass through this process whether the page is responsive or not.
+    main_mod.presence.clear()
+    main_mod.presence_touch(SID, None, playing=True, mode='relay/hls')
+    body = client.get('/presence').json()
+    check('a relayed stream alone marks the client as watching', body['watching'] == 1, body)
+
+    # Two devices, one of them stale.
+    main_mod.presence.clear()
+    main_mod.presence_touch(SID, None)
+    main_mod.presence_touch('other-device-sid', None)
+    main_mod.presence['other-device-sid']['last_seen'] -= main_mod.PRESENCE_ONLINE_TTL + 5
+    body = client.get('/presence').json()
+    check('a client that went quiet past the TTL stops being counted',
+          body['clients_online'] == 1, body)
+    main_mod.presence['other-device-sid']['last_seen'] = time.time()
+    body = client.get('/presence').json()
+    check('two live devices are two clients', body['clients_online'] == 2, body)
+    main_mod.presence.clear()
+
 print(f'\n{len(failures)} FAILURE(S)' if failures else '\nAll checks passed')
 sys.exit(1 if failures else 0)

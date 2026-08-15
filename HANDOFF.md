@@ -31,7 +31,7 @@ rebuild**.
 
 Backend version string lives at `app = FastAPI(..., version='0.9.NN', ...)`
 in `main.py` near the top; bump it whenever `backend/` changes so `/health`
-reflects what's actually deployed. **Currently: backend 0.9.101.**
+reflects what's actually deployed. **Currently: backend 0.9.102.**
 
 The real upstream API is `https://api.service-kp.com` (`API_BASE`). It is
 **intermittently unreachable** — this happened multiple times this session,
@@ -54,7 +54,7 @@ authenticated passthrough to any `v1/` path, any method).
 - Remote: `https://github.com/gunkinalexey/kinopub-webos-relay.git`
   (private). `git push`/`pull` need a working credential — deploy key on the
   Proxmox side, whatever's configured locally on Windows.
-- Backend version in the repo: **0.9.101**; still **0.9.99 on `kinopub.lan`**
+- Backend version in the repo: **0.9.102**; still **0.9.99 on `kinopub.lan`**
   — the HLS-recovery fix and the refactor below it are committed nowhere yet,
   so the TV is running neither. `curl http://localhost:8080/bridge/health`
   (local) or `curl -k https://kinopub.lan/bridge/health` (deployed, Caddy

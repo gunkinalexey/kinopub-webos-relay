@@ -2250,6 +2250,22 @@ function clearAuth(){if(state.authTick)clearInterval(state.authTick);if(state.au
 function closeAuth(){if(state.authRequired)return;clearAuth();$('authModal').classList.add('hidden');}
 function loadSettings(){KPApi.settings().then(function(s){state.settings=s;var icon=normalizeAppIcon(s.app_icon||'kinopub');state.settings.app_icon=icon;$('setQuality').value=s.quality;$('setMode').value=s.stream_mode;$('setAudio').value=s.audio_language;$('setSubs').value=s.subtitles;applySubtitleSize(s.subtitle_size);$('setFullscreen').value=playerFullscreenMode();$('setDeviceProfile').value=capabilityProfile();$('setAutoplay').checked=!!s.autoplay_next;$('setMotion').checked=!!s.reduce_motion;$('setHistoryFrames').checked=s.history_episode_frames!==false;var radios=document.querySelectorAll('input[name="appIcon"]');for(var i=0;i<radios.length;i++)radios[i].checked=radios[i].value===icon;applyBranding(icon);document.body.classList.toggle('reduce-motion',!!s.reduce_motion);});}
 
+// The backend can see every request this page makes, but not the two states
+// that matter most for "who is using this right now": a tab that is merely
+// open makes no requests at all (the only other timer here fires once every
+// six hours), and a `direct` stream is pulled straight from the CDN by the TV
+// without the bridge ever seeing a byte. Both are one small POST away.
+var PRESENCE_PING_MS=30000;
+function presenceState(){
+ var layer=$('playerLayer'),open=layer&&!layer.classList.contains('hidden');
+ var playing=!!(open&&video&&!video.paused&&!video.ended);
+ return {playing:playing,title:playing&&state.current?String(state.current.title||''):'',
+  mode:playing?(state.audioHlsActive?'audio-hls':String(state.mode||'')):''};
+}
+function sendPresencePing(){
+ if(!state.authenticated)return;
+ KPApi.presencePing(presenceState()).catch(function(){});
+}
 function clearApplicationCache(){
  state.catalogCache={};
  state.catalogPages={};
@@ -2351,5 +2367,5 @@ if(typeof window!=='undefined'&&window.addEventListener)window.addEventListener(
 // it to whichever screen is currently visible instead.
 var sidebarEl=document.querySelector('.sidebar');
 if(sidebarEl)sidebarEl.addEventListener('wheel',function(e){var target=$(visibleScreen());if(!target)return;e.preventDefault();target.scrollTop+=e.deltaY;},{passive:false});
-document.body.classList.add('auth-locked');KPApi.status().then(function(s){state.authenticated=!!s.authenticated;$('loginButton').title=s.authenticated?'Профиль':'Войти';if(s.authenticated)initializeAuthenticatedApp();else{applySubscription(null);showAuthGate();}}).catch(function(){applySubscription(null);showAuthGate();});setInterval(function(){if(state.authenticated)loadProfile(false);},6*60*60*1000);document.addEventListener('visibilitychange',function(){if(!document.hidden&&state.authenticated&&Date.now()-state.profileCheckedAt>30*60*1000)loadProfile(false);});
+document.body.classList.add('auth-locked');KPApi.status().then(function(s){state.authenticated=!!s.authenticated;$('loginButton').title=s.authenticated?'Профиль':'Войти';if(s.authenticated)initializeAuthenticatedApp();else{applySubscription(null);showAuthGate();}}).catch(function(){applySubscription(null);showAuthGate();});setInterval(function(){if(state.authenticated)loadProfile(false);},6*60*60*1000);sendPresencePing();setInterval(sendPresencePing,PRESENCE_PING_MS);document.addEventListener('visibilitychange',function(){if(!document.hidden&&state.authenticated&&Date.now()-state.profileCheckedAt>30*60*1000)loadProfile(false);});
 }());
