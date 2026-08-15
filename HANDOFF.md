@@ -59,7 +59,7 @@ authenticated passthrough to any `v1/` path, any method).
   so the TV is running neither. `curl http://localhost:8080/bridge/health`
   (local) or `curl -k https://kinopub.lan/bridge/health` (deployed, Caddy
   redirects http → https) to check.
-- **340 frontend checks, 0 failures.** Backend smoke tests also green (see
+- **353 frontend checks, 0 failures.** Backend smoke tests also green (see
   Testing below).
 - **Deployed on Proxmox, this is the primary/real instance now**, not just a
   dev convenience:

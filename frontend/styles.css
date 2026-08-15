@@ -250,3 +250,4 @@ body.auth-locked .sidebar,body.auth-locked .content-shell{visibility:hidden;poin
 /* ---- Live channel playback: no position/duration, so hide controls that
    only make sense for a seekable VOD file. ---- */
 .player-layer.live .timeline,.player-layer.live .time-row,.player-layer.live #rewind,.player-layer.live #forward,.player-layer.live .player-selects{display:none}
+.player-icon-button:disabled,.player-icon-button.is-disabled{opacity:.35;cursor:default;pointer-events:none}

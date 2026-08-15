@@ -27,7 +27,9 @@ window.KPApi = global.KPApi;
 
 const src = fs.readFileSync(process.argv[2] || path.join(FRONT, 'app.js'), 'utf8');
 eval(src.replace('}());', 'global.__app={state:state,renderEpisodes:renderDetailsEpisodes,'
-  + 'episodeLabel:episodeLabel,hasMultipleSeasons:hasMultipleSeasons};}());'));
+  + 'episodeLabel:episodeLabel,hasMultipleSeasons:hasMultipleSeasons,'
+  + 'nextEpisode:nextEpisodeEntry,updateNextButton:updateNextEpisodeButton,'
+  + 'autoplay:autoplayNextEpisode,play:play};}());'));
 const app = global.__app;
 
 let failures = 0;
@@ -117,6 +119,64 @@ check('SxxEyy code shown for a real multi-season title',
   qa('.episode-code').map(e => e.textContent), ['S01E01']);
 check('resume label includes the SxxEyy prefix',
   app.episodeLabel(SERIES, SERIES.seasons[1].episodes[0]), 'S02E01 · B1');
+
+// The player's "next episode" button. The list it walks is the same flattened
+// season order the details screen renders, so the interesting cases are the two
+// ends of it and the seam between seasons.
+console.log('--- next episode ---');
+const at = (item, mediaId) => { app.state.current = item; app.state.episodeId = String(mediaId); };
+const nextTitle = () => { const n = app.nextEpisode(); return n ? n.title : null; };
+
+at(SERIES, SERIES.seasons[0].episodes[0].id);
+check('next crosses a season boundary without season arithmetic', nextTitle(),
+  SERIES.seasons[1].episodes[0].title);
+
+at(SERIES, SERIES.seasons[1].episodes[0].id);
+check('the last episode has no next', app.nextEpisode(), null);
+
+const nextBtn = document.getElementById('nextEpisode');
+at(SERIES, SERIES.seasons[0].episodes[0].id); app.updateNextButton();
+check('the button is live while there is somewhere to go', nextBtn.disabled, false);
+
+at(SERIES, SERIES.seasons[1].episodes[0].id); app.updateNextButton();
+check('on the last episode it goes inactive but stays in place',
+  [nextBtn.disabled, nextBtn.classList.contains('is-disabled'), !!nextBtn.parentNode],
+  [true, true, true]);
+check('and says why', nextBtn.getAttribute('title'), 'Это последняя серия');
+
+at(MOVIE, (MOVIE.media && MOVIE.media[0] && MOVIE.media[0].id) || 'x'); app.updateNextButton();
+check('a movie has no next episode either', nextBtn.disabled, true);
+
+app.state.current = { id: 'tv-1', title: 'Канал', live: true };
+app.updateNextButton();
+check('nor does live TV', nextBtn.disabled, true);
+
+// Autoplay. The setting shipped long before anything read it, so these pin
+// down that the reader exists and that it stays quiet in every case where
+// jumping to another episode would be wrong.
+console.log('--- autoplay next ---');
+at(SERIES, SERIES.seasons[0].episodes[0].id);
+
+app.state.settings = { autoplay_next: true };
+check('with the setting on, the next episode is picked up', app.autoplay(), true);
+
+app.state.settings = { autoplay_next: false };
+at(SERIES, SERIES.seasons[0].episodes[0].id);
+check('with the setting off, nothing happens', app.autoplay(), false);
+
+app.state.settings = { autoplay_next: true };
+at(SERIES, SERIES.seasons[1].episodes[0].id);
+check('the last episode ends the series instead of looping', app.autoplay(), false);
+
+at(MOVIE, (MOVIE.media && MOVIE.media[0] && MOVIE.media[0].id) || 'x');
+check('a movie never autoplays', app.autoplay(), false);
+
+app.state.current = { id: 'tv-1', title: 'Канал', live: true };
+check('live TV never autoplays', app.autoplay(), false);
+
+app.state.settings = {};
+at(SERIES, SERIES.seasons[0].episodes[0].id);
+check('settings that never loaded are treated as off', app.autoplay(), false);
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);
