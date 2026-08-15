@@ -1,5 +1,5 @@
 (function(){'use strict';
-var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:imageCacheVersion(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,watchingView:'new',watchingItems:null,watchingAllItems:null,similarToken:0,serverFfmpeg:null,bookmarkFolders:null,bookmarkFolder:null,collectionSort:'new',collectionId:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,serverOptions:[],serverSelected:null,updateStatus:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,hlsFellBack:false,hlsNetworkRecoveries:0,hlsMediaRecoveries:0,hlsRecoveryTimer:null,hlsWarnReports:0,hlsWarnAt:0,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
+var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:imageCacheVersion(),catalogPages:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,watchingView:'new',watchingItems:null,watchingAllItems:null,similarToken:0,serverFfmpeg:null,bookmarkFolders:null,bookmarkFolder:null,collectionSort:'new',collectionId:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,serverOptions:[],serverSelected:null,updateStatus:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,hlsFellBack:false,hlsNetworkRecoveries:0,hlsMediaRecoveries:0,hlsRecoveryTimer:null,hlsWarnReports:0,hlsWarnAt:0,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
 var $=function(id){return document.getElementById(id);},video=$('video');
 // Every backend call that needs a session (catalog, history, profile, item
 // details...) raises a real HTTP 401 the moment the cookie is gone or
@@ -499,12 +499,24 @@ function gridColumns(){var g=$('catalogGrid'),dv=document.defaultView;if(!g||!dv
 // page in between, not just the final one. Picking the row count closest to
 // 50/cols keeps the total near 50 while landing on a whole number of rows -
 // 7/row -> 7 rows (49), 8/row -> 6 rows (48), 6/row -> 8 rows (48).
-function catalogPerPage(){var cols=gridColumns();if(!cols)return state.catalogPerPage||48;var rows=Math.max(1,Math.round(50/cols));var perpage=rows*cols;if(perpage!==state.catalogPerPage){state.catalogPerPage=perpage;state.catalogCache={};state.catalogPages={};state.catalogTotals={};}return perpage;}
+function catalogPerPage(){var cols=gridColumns();if(!cols)return state.catalogPerPage||48;var rows=Math.max(1,Math.round(50/cols));var perpage=rows*cols;if(perpage!==state.catalogPerPage){state.catalogPerPage=perpage;state.catalogCache={};state.catalogPages={};}return perpage;}
 // Filters are folded into the page/cache key itself, not tracked separately:
 // changing a filter naturally lands on an unseen key, which means page 0,
 // no stale cache, and no known total-pages count - exactly the reset a
 // filter change should cause, for free.
 function catalogFilterSignature(cfg){var f=currentFilters(cfg),parts=[];['genre','country','year_from','year_to','imdb_from','imdb_to','kp_from','kp_to','added_days','quality','sort'].forEach(function(k){if(f[k])parts.push(k+'='+f[k]);});return parts.length?'?'+parts.join('&'):'';}
+// Every page ever opened used to keep its whole 48-item payload here until the
+// session ended, and a TV runs out of memory long before a user runs out of
+// sections to browse. Going back is nearly always one or two pages, so a small
+// window is enough; the oldest entry simply falls out.
+var CATALOG_CACHE_MAX=24;
+function cacheCatalogPage(key,entry){
+ state.catalogCache[key]=entry;
+ var keys=Object.keys(state.catalogCache);
+ // Object key order is insertion order for string keys, so the front of this
+ // list is the oldest entry - re-inserting on a hit is not worth the churn.
+ for(var i=0;i<keys.length-CATALOG_CACHE_MAX;i++)delete state.catalogCache[keys[i]];
+}
 function catalogPageKey(cfg){
  if(cfg.mode==='history')return 'history:'+(state.historyType||'all');
  if(cfg.mode==='bookmarks')return 'bookmarks:'+(state.bookmarkFolder||'list');
@@ -539,19 +551,6 @@ function renderPagination(meta,itemCount){
  var canLast=knownTotal?current<totalPages-1:pageFull;
  if(canNext)root.appendChild(pageButton('>',current+1,false,false,'next'));
  if(canLast)root.appendChild(pageButton('>>',lastTarget,false,false,'last'));
-}
-function discoverTotalPages(cfg,meta,itemCount,forceRefresh){
- var key=catalogPageKey(cfg),known=state.catalogTotals[key];
- if(known>1&&!forceRefresh){meta.total_pages=Math.max(known,meta.total_pages||0);renderPagination(meta,itemCount);return;}
- KPApi.pageCount(cfg.section,cfg.feed,meta.perpage,!!forceRefresh).then(function(info){
-   var total=parseInt(info&&info.total_pages,10)||0;if(!total)return;
-   // Treat probed totals as a lower bound. Shortcut feeds can expose more pages
-   // than an earlier probe found, so never shrink a total already reached.
-   total=Math.max(total,(parseInt(meta.page,10)||0)+1,state.catalogTotals[key]||0);
-   state.catalogTotals[key]=total;meta.total_pages=total;
-   for(var cacheKey in state.catalogCache){if(cacheKey.indexOf(key+':')===0)state.catalogCache[cacheKey].meta.total_pages=Math.max(state.catalogCache[cacheKey].meta.total_pages||0,total);}
-   renderPagination(meta,itemCount);
- }).catch(function(err){KPApi.report('Page count discovery failed',{section:cfg.section,feed:cfg.feed,error:String(err)},'catalog').catch(function(){});});
 }
 // "Все фильмы"/"Все эпизоды" are two aggregate tabs on top of the per-type
 // ones, matching kino.watch's own history page (which has both, not one
@@ -875,7 +874,7 @@ function renderCatalog(){
  KPApi.catalog(cfg.section,cfg.feed,page,state.cacheVersion,perpage,filters).then(function(data){
    if(requestId!==state.catalogRequest)return;
    var items=(data&&data.items)||[],meta={page:0,total_pages:1,total_items:data&&data.total_items||0,has_next:false,perpage:perpage};
-   state.catalogCache[cacheKey]={items:items,meta:meta};
+   cacheCatalogPage(cacheKey,{items:items,meta:meta});
    renderCatalogItems(items);renderPagination(meta,items.length);
  }).catch(function(err){
    if(requestId!==state.catalogRequest)return;
@@ -1533,7 +1532,6 @@ function codecSupported(caps,isHevc){var probe=isHevc?caps.hevc:caps.h264;return
 // decision goes through this first.
 function codecProbesTrustworthy(caps){return !!(caps&&caps.h264&&(caps.h264.native||caps.h264.mse));}
 // Definite "this device cannot decode HEVC", as opposed to "did not say".
-function hevcRefused(caps){return codecProbesTrustworthy(caps)&&!caps.hevc.native&&!caps.hevc.mse;}
 // KinoPub decides which files to even offer from the device's declared
 // support flags (verified live - see /device/capabilities in main.py), so
 // these must describe the real browser, not a hopeful `true`.
@@ -2255,7 +2253,6 @@ function loadSettings(){KPApi.settings().then(function(s){state.settings=s;var i
 function clearApplicationCache(){
  state.catalogCache={};
  state.catalogPages={};
- state.catalogTotals={};
  state.catalogRequest++;
  state.cacheVersion=bumpImageCacheVersion();
  try{sessionStorage.clear();}catch(e){}
@@ -2279,7 +2276,7 @@ function cleanSearchQuery(value){return String(value||'').replace(/\s*\(\d{4}\)\
 function requestSuggestions(){var q=$('searchInput').value.trim();if(state.searchTimer)clearTimeout(state.searchTimer);if(q.length<2){state.currentSuggestions=[];hideSuggestions();return;}state.searchTimer=setTimeout(function(){var seq=++state.searchSeq;KPApi.autocomplete(q).then(function(d){if(seq!==state.searchSeq||$('searchInput').value.trim()!==q)return;renderSuggestions((d&&d.items)||[]);}).catch(function(){if(seq===state.searchSeq)hideSuggestions();});},220);}
 function doSearch(mode,forcedQuery){var raw=forcedQuery!==undefined?forcedQuery:$('searchInput').value.trim();var q=cleanSearchQuery(raw);if(!q)return;hideSuggestions();if(typeof mode==='string')state.searchMode=mode;$('searchInput').value=q;showScreen('searchScreen');$('searchPageTitle').textContent='Поиск: '+q;pushHash(encodeSearchHash(state.searchMode,q));var modeButtons=document.querySelectorAll('[data-search-mode]');for(var m=0;m<modeButtons.length;m++)modeButtons[m].classList.toggle('active',modeButtons[m].getAttribute('data-search-mode')===state.searchMode);$('searchStatus').textContent='Ищем…';var g=$('searchResults');g.innerHTML='';KPApi.search(q,state.searchMode).then(function(d){var items=d.items||[];$('searchStatus').textContent=items.length?'Найдено: '+items.length:'';for(var i=0;i<items.length;i++)g.appendChild(card(items[i]));if(!items.length)g.innerHTML='<p class="empty-state">Ничего не найдено</p>';}).catch(function(e){$('searchStatus').textContent='Ошибка поиска';g.innerHTML='<p class="empty-state">'+esc(e&&e.message?e.message:String(e))+'</p>';});}
 function diagRow(k,v){return'<div class="diag-key">'+esc(k)+'</div><div class="diag-value">'+esc(v)+'</div>';}
-function openDiag(){var v=document.createElement('video'),caps=mediaCapabilities(),group=currentQualityGroup(),d={userAgent:navigator.userAgent,screen:screen.width+'×'+screen.height,hls:v.canPlayType('application/vnd.apple.mpegurl')||'нет','H.264':caps.h264.answer+(caps.h264.mse?' + MSE':''),'HEVC (Main10)':caps.hevc.answer+(caps.hevc.mse?' + MSE':'')+(caps.hevc.native?'':(codecProbesTrustworthy(caps)?' — аппаратно недоступен':' — браузер не отвечает на пробы')),'HEVC 4K':caps.hevc4k.answer+(caps.hevc4k.mse?' + MSE':''),'Пробы кодеков':codecProbesTrustworthy(caps)?'отвечает, ответам можно верить':'молчит даже про H.264 — негативным ответам не верим','HDR-дисплей':answerLabel(caps.hdrAnswer),'Гамут P3':answerLabel(caps.gamutAnswer),'Профиль устройства':capabilityProfile(),'Сообщаем KinoPub':reportedLabel(reportedCapabilities()),'Потолок качества':qualityCap()?qualityCap()+'p':'авто','Текущий вариант':group?((group.quality||group.height+'p')+' · '+(group.codec||'?')+' · '+state.mode.toUpperCase()):'плеер закрыт','Декодируется':video.videoWidth?(video.videoWidth+'×'+video.videoHeight):'нет потока','Полный экран':playerFullscreenMode()+(fullscreenElement()?' · активен':' · не активен')};var h='';for(var k in d)h+=diagRow(k,d[k]);$('diagnosticsGrid').innerHTML=h;KPApi.health().then(function(x){state.serverFfmpeg=x&&x.ffmpeg!==undefined?!!x.ffmpeg:null;$('diagnosticsGrid').innerHTML+=diagRow('backend',x.status+' '+x.version)+diagRow('API credentials',x.credentials_configured?'настроены':'не настроены')+diagRow('FFmpeg на сервере',x.ffmpeg===undefined?'не сообщает':(x.ffmpeg?'есть':'нет — пересборка звуковой дорожки недоступна'));});KPApi.status().then(function(x){$('diagnosticsGrid').innerHTML+=diagRow('Сессия',x.authenticated?'активна':'нет')+diagRow('Refresh-токен',x.authenticated?(x.has_refresh_token?'есть':'ОТСУТСТВУЕТ — сессия умрёт вместе с access-токеном'):'—')+diagRow('Токен истекает через',x.authenticated?fmt(x.expires_in||0):'—');});KPApi.deviceState().then(function(x){var f=x.flags||{};$('diagnosticsGrid').innerHTML+=diagRow('KinoPub: HEVC',f.supportHevc?'да':'НЕТ — отдаёт только h264, без HDR и без Direct')+diagRow('KinoPub: 4K',f.support4k?'да':'нет')+diagRow('KinoPub: HDR',f.supportHdr?'да':'нет')+diagRow('KinoPub: тип потока',x.streaming_type||'—')+diagRow('KinoPub: устройство',(x.title||'—')+' · '+(x.software||'—'));}).catch(function(){$('diagnosticsGrid').innerHTML+=diagRow('KinoPub: устройство','не удалось прочитать');});KPApi.debugEvents().then(function(x){var l=[],a=x.events||[];for(var i=0;i<Math.min(a.length,30);i++)l.push(new Date(a[i].at*1000).toLocaleTimeString()+' ['+a[i].kind+'] '+a[i].message);$('diagnosticsLog').textContent=l.join('\n')||'Логи пусты';});$('diagnosticsModal').classList.remove('hidden');}
+function openDiag(){var v=document.createElement('video'),caps=mediaCapabilities(),group=currentQualityGroup(),d={userAgent:navigator.userAgent,screen:screen.width+'×'+screen.height,hls:v.canPlayType('application/vnd.apple.mpegurl')||'нет','H.264':caps.h264.answer+(caps.h264.mse?' + MSE':''),'HEVC (Main10)':caps.hevc.answer+(caps.hevc.mse?' + MSE':'')+(caps.hevc.native?'':(codecProbesTrustworthy(caps)?' — аппаратно недоступен':' — браузер не отвечает на пробы')),'HEVC 4K':caps.hevc4k.answer+(caps.hevc4k.mse?' + MSE':''),'Пробы кодеков':codecProbesTrustworthy(caps)?'отвечает, ответам можно верить':'молчит даже про H.264 — негативным ответам не верим','HDR-дисплей':answerLabel(caps.hdrAnswer),'Гамут P3':answerLabel(caps.gamutAnswer),'Профиль устройства':capabilityProfile(),'Сообщаем KinoPub':reportedLabel(reportedCapabilities()),'Потолок качества':qualityCap()?qualityCap()+'p':'авто','Текущий вариант':group?((group.quality||group.height+'p')+' · '+(group.codec||'?')+' · '+state.mode.toUpperCase()):'плеер закрыт','Декодируется':video.videoWidth?(video.videoWidth+'×'+video.videoHeight):'нет потока','Полный экран':playerFullscreenMode()+(fullscreenElement()?' · активен':' · не активен')};var h='';for(var k in d)h+=diagRow(k,d[k]);var diagParts={backend:'',session:'',device:''};function renderDiag(){$('diagnosticsGrid').innerHTML=h+diagParts.backend+diagParts.session+diagParts.device;}renderDiag();KPApi.health().then(function(x){state.serverFfmpeg=x&&x.ffmpeg!==undefined?!!x.ffmpeg:null;diagParts.backend=diagRow('backend',x.status+' '+x.version)+diagRow('API credentials',x.credentials_configured?'настроены':'не настроены')+diagRow('FFmpeg на сервере',x.ffmpeg===undefined?'не сообщает':(x.ffmpeg?'есть':'нет — пересборка звуковой дорожки недоступна'));renderDiag();});KPApi.status().then(function(x){diagParts.session=diagRow('Сессия',x.authenticated?'активна':'нет')+diagRow('Refresh-токен',x.authenticated?(x.has_refresh_token?'есть':'ОТСУТСТВУЕТ — сессия умрёт вместе с access-токеном'):'—')+diagRow('Токен истекает через',x.authenticated?fmt(x.expires_in||0):'—');renderDiag();});KPApi.deviceState().then(function(x){var f=x.flags||{};diagParts.device=diagRow('KinoPub: HEVC',f.supportHevc?'да':'НЕТ — отдаёт только h264, без HDR и без Direct')+diagRow('KinoPub: 4K',f.support4k?'да':'нет')+diagRow('KinoPub: HDR',f.supportHdr?'да':'нет')+diagRow('KinoPub: тип потока',x.streaming_type||'—')+diagRow('KinoPub: устройство',(x.title||'—')+' · '+(x.software||'—'));renderDiag();}).catch(function(){diagParts.device=diagRow('KinoPub: устройство','не удалось прочитать');renderDiag();});KPApi.debugEvents().then(function(x){var l=[],a=x.events||[];for(var i=0;i<Math.min(a.length,30);i++)l.push(new Date(a[i].at*1000).toLocaleTimeString()+' ['+a[i].kind+'] '+a[i].message);$('diagnosticsLog').textContent=l.join('\n')||'Логи пусты';});$('diagnosticsModal').classList.remove('hidden');}
 // Three-way probe answers need three-way labels: "не сообщает" used to cover
 // both "no" and "never heard of the question", which is exactly the conflation
 // that hid the HDR regression.

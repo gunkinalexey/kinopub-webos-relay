@@ -19,7 +19,7 @@ from urllib.parse import quote, urljoin, urlparse, parse_qsl
 import httpx
 from io import BytesIO
 from PIL import Image, ImageOps
-from fastapi import Cookie, FastAPI, HTTPException, Request, Response
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
@@ -69,15 +69,19 @@ FFMPEG_AVAILABLE = _ffmpeg_available()
 
 pending_devices: Dict[str, Dict[str, Any]] = {}
 debug_events = []
-page_count_cache: Dict[str, Dict[str, Any]] = {}
 profile_cache: Dict[str, Dict[str, Any]] = {}
 # Catalogue pages aren't personalised (watched/bookmark state comes from the
 # separate /watching/statuses and /history calls, never from /catalog/list
 # items) - short TTL is safe and cuts duplicate upstream hits from quick
 # back-and-forth sidebar navigation or more than one open tab/session.
 CATALOG_LIST_CACHE_TTL = 60
-catalog_list_cache: Dict[str, Dict[str, Any]] = {}
-PAGE_COUNT_TTL = 6 * 60 * 60
+# Bounded, because this bridge is a long-running box, not a request-scoped
+# process: the key carries the section, feed, page *and* every filter value, so
+# left alone it grows one full 48-item payload per combination the user has
+# ever browsed and never gives a byte back. The TTL check on read only decides
+# whether an entry is served - it never removed one.
+CATALOG_LIST_CACHE_MAX = 120
+catalog_list_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 # Genres and countries are reference tables - KinoPub's own values have not
 # moved in the lifetime of this project. They were being re-fetched upstream
 # every single time the filter panel opened in a fresh tab, which is a real
@@ -109,11 +113,9 @@ def db_init() -> None:
             updated_at REAL NOT NULL
         )''')
         conn.execute('DELETE FROM sessions WHERE updated_at < ?', (time.time() - 60 * 60 * 24 * 45,))
-        # Generic expiring key/value store. Exists so caches that are
-        # expensive to rebuild survive a container restart - page counts cost
-        # a real upstream probe per catalogue section, and the prewarm task
-        # re-ran all twelve of them on every `docker compose up -d --build`
-        # because the dict holding them lived only in memory.
+        # Generic expiring key/value store, for caches that are expensive to
+        # rebuild and should survive a container restart rather than being
+        # re-fetched from upstream on every `docker compose up -d --build`.
         conn.execute("CREATE TABLE IF NOT EXISTS kv_cache (key TEXT PRIMARY KEY, payload TEXT NOT NULL, expires_at REAL NOT NULL)")
         conn.execute('DELETE FROM kv_cache WHERE expires_at < ?', (time.time(),))
         conn.execute("CREATE TABLE IF NOT EXISTS user_settings (profile TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at REAL NOT NULL)")
@@ -180,7 +182,6 @@ async def lifespan(app: FastAPI):
         if child.is_dir():
             shutil.rmtree(child, ignore_errors=True)
     app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30, connect=15), follow_redirects=False)
-    app.state.page_count_task = asyncio.create_task(prewarm_page_counts())
     app.state.audio_hls_cleanup_task = asyncio.create_task(audio_hls_cleanup_loop())
     yield
     for job in list(audio_hls_jobs.values()):
@@ -191,7 +192,7 @@ async def lifespan(app: FastAPI):
                 await asyncio.wait_for(process.wait(), timeout=2)
             if process.returncode is None:
                 process.kill()
-    for name in ('page_count_task', 'audio_hls_cleanup_task'):
+    for name in ('audio_hls_cleanup_task',):
         task = getattr(app.state, name, None)
         if task and not task.done():
             task.cancel()
@@ -200,7 +201,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.100', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.101', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -371,6 +372,18 @@ async def refresh_if_needed(sid: str, session: Dict[str, Any]) -> Dict[str, Any]
         # The caller passed this dict in and may keep using it after the call.
         session.update(current)
         return current
+
+
+async def current_session(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+    """The live session for this request, refreshed if the clock says so.
+
+    Every authenticated handler opened with the same two calls spelled out by
+    hand. As a dependency it is declared once, cannot be forgotten halfway
+    down a new handler, and the 401 for "no cookie" or "dead session" comes
+    from one place instead of thirty-four. The returned row carries its own
+    ``sid``, so handlers that need the session id do not also need the cookie.
+    """
+    return await refresh_if_needed(kp_session or '', session_get(kp_session))
 
 
 
@@ -986,7 +999,7 @@ async def catalog_list(
     imdb_from: Optional[float] = None, imdb_to: Optional[float] = None,
     kp_from: Optional[float] = None, kp_to: Optional[float] = None,
     quality: Optional[int] = None, sort: Optional[str] = None,
-    kp_session: Optional[str] = Cookie(default=None),
+    session: Dict[str, Any] = Depends(current_session),
 ) -> Dict[str, Any]:
     """Return one explicitly typed KinoPub catalogue section.
 
@@ -1091,8 +1104,8 @@ async def catalog_list(
     cache_key = json.dumps({'endpoint': endpoint, 'selector': selector, 'page': api_page, 'perpage': perpage}, sort_keys=True)
     cached = catalog_list_cache.get(cache_key)
     if cached and time.time() - cached['at'] < CATALOG_LIST_CACHE_TTL:
+        catalog_list_cache.move_to_end(cache_key)
         return cached['data']
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, endpoint, {**selector, 'page': api_page, 'perpage': perpage})
     items = extract_catalog_items(payload)
     for item in items:
@@ -1117,12 +1130,11 @@ async def catalog_list(
         'items': items,
     }
     catalog_list_cache[cache_key] = {'at': time.time(), 'data': result}
+    catalog_list_cache.move_to_end(cache_key)
+    while len(catalog_list_cache) > CATALOG_LIST_CACHE_MAX:
+        catalog_list_cache.popitem(last=False)
     return result
 
-
-
-def _page_count_cache_key(section: str, feed: str, perpage: int) -> str:
-    return f"{section}:{feed}:{perpage}"
 
 
 def _first_int(*values: Any) -> int:
@@ -1173,155 +1185,6 @@ async def _catalog_page_probe(session: Dict[str, Any], endpoint: str, selector: 
         'total_pages': page_meta['total_pages'],
         'total_items': page_meta['total_items'],
     }
-
-
-async def _discover_page_count(session: Dict[str, Any], section: str, feed: str, perpage: int, refresh: bool = False) -> Dict[str, Any]:
-    """Find the last distinct upstream page.
-
-    KinoPub may repeat the final page for out-of-range page numbers instead of
-    returning an empty list. A page is therefore considered invalid when it is
-    empty or repeats either page 1 or the immediately preceding page.
-    """
-    selector = section_params(section)
-    endpoint = CATALOG_FEEDS[feed]
-    key = _page_count_cache_key(section, feed, perpage)
-    cached = page_count_cache.get(key)
-    if cached and not refresh and cached.get('expires_at', 0) > time.time():
-        return {k: v for k, v in cached.items() if k != 'expires_at'}
-    # Second chance before probing upstream: a previous container already
-    # worked this out and it is still inside the 6h window. Without this the
-    # prewarm task re-probed all twelve sections on every restart.
-    if not refresh:
-        stored = kv_get('page_count:' + key)
-        if stored:
-            page_count_cache[key] = {**stored, 'expires_at': time.time() + PAGE_COUNT_TTL}
-            return stored
-
-    probe_cache: Dict[int, Dict[str, Any]] = {}
-    probes = 0
-
-    async def probe(page: int) -> Dict[str, Any]:
-        nonlocal probes
-        page = max(1, page)
-        if page not in probe_cache:
-            probe_cache[page] = await _catalog_page_probe(session, endpoint, selector, page, perpage)
-            probes += 1
-        return probe_cache[page]
-
-    first = await probe(1)
-    if first.get('total_pages', 0) > 0:
-        result = {
-            'section': section,
-            'feed': feed,
-            'perpage': perpage,
-            'total_pages': first['total_pages'],
-            'total_items': first.get('total_items', 0),
-            'exact': True,
-            'source': 'api-pagination',
-            'probes': probes,
-        }
-    elif first['count'] == 0:
-        result = {'section': section, 'feed': feed, 'perpage': perpage, 'total_pages': 0, 'total_items': 0, 'exact': True, 'probes': probes}
-    elif first['count'] < perpage:
-        result = {'section': section, 'feed': feed, 'perpage': perpage, 'total_pages': 1, 'total_items': first['count'], 'exact': True, 'probes': probes}
-    else:
-        first_signature = first['signature']
-
-        async def is_valid(page: int) -> bool:
-            current = await probe(page)
-            if current['count'] == 0:
-                return False
-            if page <= 1:
-                return True
-            previous = await probe(page - 1)
-            if current['signature'] and current['signature'] == previous['signature']:
-                return False
-            if current['signature'] and current['signature'] == first_signature:
-                return False
-            return True
-
-        low, high = 1, 2
-        max_page = 10000
-        boundary_found = False
-        while high <= max_page:
-            if not await is_valid(high):
-                boundary_found = True
-                break
-            low = high
-            current = await probe(high)
-            if current['count'] < perpage:
-                high += 1
-                boundary_found = True
-                break
-            high *= 2
-
-        if high > max_page:
-            high = max_page + 1
-
-        while low + 1 < high:
-            mid = (low + high) // 2
-            if await is_valid(mid):
-                low = mid
-            else:
-                high = mid
-                boundary_found = True
-
-        total_pages = low
-        last = await probe(total_pages)
-        total_items = max(0, (total_pages - 1) * perpage + last['count'])
-        result = {
-            'section': section, 'feed': feed, 'perpage': perpage,
-            'total_pages': total_pages, 'total_items': total_items,
-            'exact': boundary_found, 'probes': probes,
-        }
-
-    page_count_cache[key] = {**result, 'expires_at': time.time() + PAGE_COUNT_TTL}
-    kv_set('page_count:' + key, result, PAGE_COUNT_TTL)
-    log_event('catalog', 'Catalogue page count discovered', result)
-    return result
-
-
-async def prewarm_page_counts(force: bool = False, sid: Optional[str] = None) -> None:
-    """Precompute catalogue sizes in the background using the latest session."""
-    await asyncio.sleep(1)
-    try:
-        row = session_get(sid) if sid else session_latest()
-        if not row:
-            log_event('catalog', 'Page-count prewarm skipped: no saved session')
-            return
-        session_sid = sid or str(row.get('sid', ''))
-        session = await refresh_if_needed(session_sid, row)
-        targets = [
-            ('movie', 'popular'), ('movie', 'fresh'), ('movie', 'hot'),
-            ('movie', 'all'), ('serial', 'all'), ('3d', 'all'), ('anime', 'all'), ('concert', 'all'),
-            ('documovie', 'all'), ('docuserial', 'all'),
-            ('tvshow', 'all'), ('sport', 'all'),
-        ]
-        for section, feed in targets:
-            try:
-                await _discover_page_count(session, section, feed, 48, refresh=force)
-            except Exception as exc:
-                log_event('catalog', 'Page-count prewarm target failed', {
-                    'section': section, 'feed': feed, 'error': str(exc)
-                })
-        log_event('catalog', 'Page-count prewarm completed', {'targets': len(targets)})
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        log_event('catalog', 'Page-count prewarm failed', {'error': str(exc)})
-
-
-@app.get('/catalog/page-count')
-async def catalog_page_count(section: str = 'movie', feed: str = 'fresh', perpage: int = 48, refresh: bool = False, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
-    section = section.strip().lower()
-    feed = feed.strip().lower()
-    if section not in CATALOG_SECTIONS:
-        raise HTTPException(400, f'Unknown catalogue section: {section}')
-    if feed not in CATALOG_FEEDS:
-        raise HTTPException(400, f'Unknown catalogue feed: {feed}')
-    perpage = max(1, min(perpage, 100))
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
-    return await _discover_page_count(session, section, feed, perpage, refresh=refresh)
 
 
 HISTORY_TYPES = ['movie', 'serial', '3d', 'concert', 'documovie', 'docuserial', 'tvshow']
@@ -1413,7 +1276,7 @@ async def _history_scan(session: Dict[str, Any], sid: str, section: str) -> List
 
 
 @app.get('/catalog/history')
-async def catalog_history(page: int = 0, perpage: int = 48, type: str = '', kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_history(page: int = 0, perpage: int = 48, type: str = '', session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """Viewing history from KinoPub, newest first, grouped by day.
 
     Distinct from ``/history``, which is this bridge's own resume positions.
@@ -1423,10 +1286,9 @@ async def catalog_history(page: int = 0, perpage: int = 48, type: str = '', kp_s
         raise HTTPException(400, f'Unknown history type: {section}')
     page = max(0, min(page, 9999))
     perpage = max(1, min(perpage, 100))
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
 
     if section:
-        matched = await _history_scan(session, kp_session or '', section)
+        matched = await _history_scan(session, session['sid'], section)
         start = page * perpage
         items = matched[start:start + perpage]
         total_items = len(matched)
@@ -1460,7 +1322,7 @@ async def catalog_history(page: int = 0, perpage: int = 48, type: str = '', kp_s
 
 
 @app.get('/catalog/watching')
-async def catalog_watching(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_watching(session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """"Я смотрю" ("I'm watching") - series explicitly marked "Буду смотреть"
     (subscribed via `v1/watching/togglewatchlist`), straight from KinoPub's
     own `v1/watching/serials?subscribed=1` (a real, dedicated endpoint - not
@@ -1470,7 +1332,6 @@ async def catalog_watching(kp_session: Optional[str] = Cookie(default=None)) -> 
     whether it was ever subscribed to). Each entry carries real
     total/watched/new episode counts.
     """
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, 'v1/watching/serials', {'subscribed': 1})
     raw_items = payload.get('items') if isinstance(payload, dict) else None
     items: List[Dict[str, Any]] = []
@@ -1504,7 +1365,7 @@ subscribed_cache: Dict[str, Dict[str, Any]] = {}
 
 
 @app.get('/catalog/watching/subscribed')
-async def catalog_watching_subscribed(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_watching_subscribed(session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """Every serial marked "Буду смотреть", including the fully-watched ones.
 
     `/catalog/watching` cannot answer this and no amount of parameters will
@@ -1534,8 +1395,7 @@ async def catalog_watching_subscribed(kp_session: Optional[str] = Cookie(default
     depth - `HISTORY_SCAN_PAGES` pages back - and that is reported honestly in
     the response as `scanned_pages`/`history_exhausted` rather than hidden.
     """
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
-    cache_key = hashlib.sha256((kp_session or '').encode('utf-8')).hexdigest()[:16]
+    cache_key = hashlib.sha256((session['sid']).encode('utf-8')).hexdigest()[:16]
     cached = subscribed_cache.get(cache_key)
     if cached and cached['at'] + SUBSCRIBED_CACHE_TTL > time.time():
         return cached['result']
@@ -1602,7 +1462,7 @@ async def catalog_watching_subscribed(kp_session: Optional[str] = Cookie(default
 
 
 @app.get('/catalog/items/{item_id}/similar')
-async def catalog_item_similar(item_id: str, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_item_similar(item_id: str, session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """KinoPub's own "похожие" list for one title (`v1/items/similar?id=`).
 
     A real, dedicated endpoint - it validates like one (400 without `id`, 404
@@ -1620,7 +1480,6 @@ async def catalog_item_similar(item_id: str, kp_session: Optional[str] = Cookie(
     returns exactly what the API gives and the UI hides the section when the
     list comes back empty.
     """
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, 'v1/items/similar', {'id': item_id})
     raw_items = payload.get('items') if isinstance(payload, dict) else None
     items = [normalize_catalog_item(raw) for raw in (raw_items or []) if isinstance(raw, dict)]
@@ -1630,7 +1489,7 @@ async def catalog_item_similar(item_id: str, kp_session: Optional[str] = Cookie(
 
 
 @app.get('/catalog/tv')
-async def catalog_tv(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_tv(session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """Live TV channels - a real, separate KinoPub feature from the VOD
     catalogue (`v1/tv`, kinoapi.com/api_tv.html), not the mock feed the
     "Спорт" sidebar section used before (a VOD genre filter that returned
@@ -1640,7 +1499,6 @@ async def catalog_tv(kp_session: Optional[str] = Cookie(default=None)) -> Dict[s
     TNT Sport UHD, MATCH!-branded channels...) and matches that page's own
     channel list one-for-one, so no further genre filtering is needed here.
     """
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, 'v1/tv', {})
     raw_channels = payload.get('channels') if isinstance(payload, dict) else None
     channels: List[Dict[str, Any]] = []
@@ -1662,14 +1520,13 @@ async def catalog_tv(kp_session: Optional[str] = Cookie(default=None)) -> Dict[s
 
 
 @app.get('/catalog/genres')
-async def catalog_genres(content_type: str = 'movie', kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_genres(content_type: str = 'movie', session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """Real genre reference list (`v1/genres?type=`) for the filter panel -
     replaces the old empty stub `<select>` that had no options at all."""
     cache_key = 'genres:' + (content_type or 'all')
     cached = kv_get(cache_key)
     if cached is not None:
         return {'genres': cached}
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, 'v1/genres', {'type': content_type} if content_type else {})
     raw_items = payload.get('items') if isinstance(payload, dict) else None
     genres = [{'id': r.get('id'), 'title': str(r.get('title') or '')} for r in (raw_items or []) if isinstance(r, dict) and r.get('id') is not None]
@@ -1679,12 +1536,11 @@ async def catalog_genres(content_type: str = 'movie', kp_session: Optional[str] 
 
 
 @app.get('/catalog/countries')
-async def catalog_countries(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_countries(session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """Real country reference list (`v1/countries`) for the filter panel."""
     cached = kv_get('countries')
     if cached is not None:
         return {'countries': cached}
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, 'v1/countries', {})
     raw_items = payload.get('items') if isinstance(payload, dict) else (payload if isinstance(payload, list) else None)
     countries = [{'id': r.get('id'), 'title': str(r.get('title') or '')} for r in (raw_items or []) if isinstance(r, dict) and r.get('id') is not None]
@@ -1694,7 +1550,7 @@ async def catalog_countries(kp_session: Optional[str] = Cookie(default=None)) ->
 
 
 @app.get('/catalog/bookmarks')
-async def catalog_bookmarks(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_bookmarks(session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """Real per-account bookmark folders (`v1/bookmarks`,
     kinoapi.com/api_bookmarks.html) - the "Закладки" sidebar button was dead
     (no `data-route`) before this. Browsing only for now: creating/renaming/
@@ -1702,7 +1558,6 @@ async def catalog_bookmarks(kp_session: Optional[str] = Cookie(default=None)) ->
     too (`v1/bookmarks/create`, `/add`, `/remove-folder`, `/remove-item`,
     `/toggle-item`) but weren't asked for, so not wired up.
     """
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, 'v1/bookmarks', {})
     raw_items = payload.get('items') if isinstance(payload, dict) else None
     folders = []
@@ -1720,7 +1575,7 @@ async def catalog_bookmarks(kp_session: Optional[str] = Cookie(default=None)) ->
 
 
 @app.get('/catalog/bookmarks/{folder_id}')
-async def catalog_bookmark_folder(folder_id: str, page: int = 0, perpage: int = 48, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_bookmark_folder(folder_id: str, page: int = 0, perpage: int = 48, session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """One bookmark folder's contents (`v1/bookmarks/view?folder=`) - same
     item shape as the regular catalogue, so the existing card/details flow
     works unchanged.
@@ -1737,7 +1592,6 @@ async def catalog_bookmark_folder(folder_id: str, page: int = 0, perpage: int = 
     is exactly the mismatch that got reported. Keeping every entry (even a
     literal duplicate) makes the grid match the folder's own count number.
     """
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     api_page = max(0, page) + 1
     perpage = max(1, min(perpage, 100))
     payload = await kino_get(session, 'v1/bookmarks/view', {'folder': folder_id, 'page': api_page, 'perpage': perpage})
@@ -1773,7 +1627,7 @@ def _normalize_collection(raw: Dict[str, Any]) -> Dict[str, Any]:
 @app.get('/catalog/collections')
 async def catalog_collections(
     sort: str = 'new', page: int = 0, perpage: int = 24,
-    kp_session: Optional[str] = Cookie(default=None),
+    session: Dict[str, Any] = Depends(current_session),
 ) -> Dict[str, Any]:
     """Curated "Подборки" (`v1/collections`, kinoapi.com/api_collections.html
     - documented on its own page, separate from the general video-API
@@ -1795,7 +1649,6 @@ async def catalog_collections(
     own "Популярные" tab shows).
     """
     upstream_sort = COLLECTION_SORTS.get(sort, COLLECTION_SORTS['new'])
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     perpage = max(1, min(perpage, 100))
     api_page = max(0, page) + 1
     payload = await kino_get(session, 'v1/collections', {'sort': upstream_sort, 'page': api_page, 'perpage': perpage})
@@ -1810,7 +1663,7 @@ async def catalog_collections(
 
 
 @app.get('/catalog/collections/{collection_id}')
-async def catalog_collection_view(collection_id: str, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_collection_view(collection_id: str, session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """One collection's contents (`v1/collections/view?id=`) - same item
     shape as the regular catalogue (verified live: same fields as a
     `v1/items` entry, movies and serials mixed freely, e.g. "MARVEL" opens
@@ -1824,7 +1677,6 @@ async def catalog_collection_view(collection_id: str, kp_session: Optional[str] 
     frontend paginates this list client-side rather than pretend the API
     offers server paging it does not.
     """
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, 'v1/collections/view', {'id': collection_id})
     raw_collection = payload.get('collection') if isinstance(payload, dict) else {}
     raw_items = payload.get('items') if isinstance(payload, dict) else None
@@ -1871,7 +1723,7 @@ SEARCH_MODE_FIELDS = {'title': 'title', 'actor': 'cast', 'director': 'director'}
 
 
 @app.get('/catalog/search')
-async def catalog_search(q: str, mode: str = 'all', kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_search(q: str, mode: str = 'all', session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """`v1/items/search`'s real `field` parameter - documented (only on
     `api_video.html`'s search section, easy to miss) as "поиск только в одном
     из полей title,director,cast" - was never wired here, so "Актёры"/
@@ -1888,7 +1740,6 @@ async def catalog_search(q: str, mode: str = 'all', kp_session: Optional[str] = 
     query = q.strip()
     if not query:
         return {'query': '', 'mode': mode, 'items': []}
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     params: Dict[str, Any] = {'q': query, 'page': 0, 'perpage': 60}
     field = SEARCH_MODE_FIELDS.get(mode)
     if field:
@@ -2017,8 +1868,7 @@ def _item_details(raw: Dict[str, Any], media: List[Dict[str, Any]]) -> Dict[str,
 
 
 @app.get('/catalog/items/{item_id}')
-async def catalog_item(item_id: str, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+async def catalog_item(item_id: str, session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     payload = await kino_get(session, f'v1/items/{item_id}', {})
     raw_item = payload.get('item') if isinstance(payload, dict) and isinstance(payload.get('item'), dict) else payload
     item = normalize_catalog_item(raw_item if isinstance(raw_item, dict) else {'id': item_id})
@@ -2034,11 +1884,10 @@ async def catalog_item(item_id: str, kp_session: Optional[str] = Cookie(default=
 
 
 @app.post('/catalog/items/{item_id}/vote')
-async def catalog_item_vote(item_id: str, like: int = 1, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_item_vote(item_id: str, like: int = 1, session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """Cast a thumbs up/down vote. KinoPub's own vote endpoint is a GET with
     query params (`v1/items/vote?id=&like=`) - exposed here as a POST since
     it's a mutation from our side, regardless of how upstream models it."""
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, 'v1/items/vote', {'id': item_id, 'like': 1 if like else 0})
     return {
         'voted': bool(payload.get('voted')),
@@ -2049,13 +1898,12 @@ async def catalog_item_vote(item_id: str, like: int = 1, kp_session: Optional[st
 
 
 @app.post('/catalog/items/{item_id}/watchlist')
-async def catalog_item_watchlist(item_id: str, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_item_watchlist(item_id: str, session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """Toggle "Буду смотреть" tracking for a title via KinoPub's real
     `v1/watching/togglewatchlist?id=` - flips membership in the same list
     `/catalog/watching` (`v1/watching/serials?subscribed=1`) reads from.
     Verified live: confirmed request/response shape and that it round-trips
     (toggled off and back on the same item without leaving state changed)."""
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, 'v1/watching/togglewatchlist', {'id': item_id})
     return {'subscribed': bool(payload.get('watching'))}
 
@@ -2086,14 +1934,13 @@ def _watching_episode_map(raw_item: Dict[str, Any]) -> Dict[str, Dict[str, Any]]
 
 
 @app.get('/catalog/items/{item_id}/watching')
-async def catalog_item_watching(item_id: str, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def catalog_item_watching(item_id: str, session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """KinoPub's own watched status for one title, straight from `v1/watching
     ?id=` - a real per-video `status`/`time` (position), tracked across every
     device the account has used, not just this client's local SQLite
     progress. Cheap for a single title; unlike /watching/statuses (which
     scans up to 20 pages of v1/history for the whole catalogue grid at once),
     this has no bulk equivalent - it only ever takes one id."""
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     payload = await kino_get(session, 'v1/watching', {'id': item_id})
     raw_item = payload.get('item') if isinstance(payload, dict) else {}
     if not isinstance(raw_item, dict):
@@ -2105,8 +1952,7 @@ async def catalog_item_watching(item_id: str, kp_session: Optional[str] = Cookie
 
 
 @app.get('/catalog/items/{item_id}/play')
-async def catalog_play(item_id: str, media_id: Optional[str] = None, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+async def catalog_play(item_id: str, media_id: Optional[str] = None, session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     payload = await kino_get(session, f'v1/items/{item_id}', {})
     media = collect_media(payload)
     selected = next((entry for entry in media if media_id and entry['id'] == media_id), None) or (media[0] if media else None)
@@ -2189,8 +2035,7 @@ def _ranking_score(actual_ids: List[str], target_ids: List[str]) -> Dict[str, An
     }
 
 @app.get('/catalog/compare-feeds')
-async def compare_catalog_feeds(feed: str = 'both', kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+async def compare_catalog_feeds(feed: str = 'both', session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     feed = (feed or 'both').strip().lower()
     if feed not in {'popular', 'hot', 'both'}:
         raise HTTPException(400, 'feed must be popular, hot or both')
@@ -2360,9 +2205,8 @@ def _subscription_payload(payload: Any) -> Dict[str, Any]:
 
 
 @app.get('/profile')
-async def profile(refresh: bool = False, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
-    sid = kp_session or ''
-    session = await refresh_if_needed(sid, session_get(kp_session))
+async def profile(refresh: bool = False, session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
+    sid = session['sid']
     cached = profile_cache.get(sid)
     if cached and not refresh and time.time() - cached.get('at', 0) < 300:
         return cached['data']
@@ -2424,7 +2268,7 @@ def _device_flag(settings: Any, name: str) -> bool:
 
 
 @app.post('/device/capabilities')
-async def device_capabilities(payload: CapabilitiesPayload, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def device_capabilities(payload: CapabilitiesPayload, session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """Tell KinoPub what this browser can actually decode.
 
     This is not cosmetic: KinoPub serves a **different set of files** per
@@ -2455,7 +2299,6 @@ async def device_capabilities(payload: CapabilitiesPayload, kp_session: Optional
     strip the TV's capabilities. Both failures are the same mistake: writing
     a negative that nobody actually asserted.
     """
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     info = await kino_get(session, 'v1/device/info', {})
     device = info.get('device') if isinstance(info, dict) else {}
     if not isinstance(device, dict):
@@ -2482,7 +2325,7 @@ async def device_capabilities(payload: CapabilitiesPayload, kp_session: Optional
 
 
 @app.get('/device/state')
-async def device_state(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def device_state(session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """The capability flags KinoPub currently holds for this device.
 
     Read-only counterpart to `/device/capabilities`, for the diagnostics
@@ -2491,7 +2334,6 @@ async def device_state(kp_session: Optional[str] = Cookie(default=None)) -> Dict
     sitting in `v1/device/info` the whole time - so the player now shows them
     next to the browser's own probe results, on the TV itself.
     """
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     info = await kino_get(session, 'v1/device/info', {})
     device = info.get('device') if isinstance(info, dict) else {}
     if not isinstance(device, dict):
@@ -2582,9 +2424,8 @@ def _server_options(settings: Any) -> List[Dict[str, Any]]:
 
 
 @app.get('/servers')
-async def servers(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def servers(session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """Which CDN regions this account can pick from, and the current one."""
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     device = await _device_record(session)
     settings = device.get('settings') if isinstance(device.get('settings'), dict) else {}
     options = _server_options(settings)
@@ -2597,8 +2438,7 @@ async def servers(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str,
 
 
 @app.post('/servers/select')
-async def servers_select(payload: ServerSelectPayload, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+async def servers_select(payload: ServerSelectPayload, session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     device = await _device_record(session)
     settings = device.get('settings') if isinstance(device.get('settings'), dict) else {}
     options = _server_options(settings)
@@ -2690,7 +2530,7 @@ async def _measure_download(client: httpx.AsyncClient, url: str) -> Dict[str, An
 
 
 @app.post('/servers/measure')
-async def servers_measure(payload: ServerMeasurePayload, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def servers_measure(payload: ServerMeasurePayload, session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """Availability + latency + throughput for every CDN region on offer.
 
     Each region is measured by actually switching to it and pulling the first
@@ -2706,7 +2546,6 @@ async def servers_measure(payload: ServerMeasurePayload, kp_session: Optional[st
     throughout - it is a full signed URL to a specific host, not a redirect
     resolved at play time - so this does not interrupt playback in progress.
     """
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     if server_measure_lock.locked():
         raise HTTPException(409, 'Проверка серверов уже идёт')
     async with server_measure_lock:
@@ -2865,10 +2704,6 @@ async def auth_device_poll(payload: DevicePoll, response: Response) -> Response:
         })
     else:
         log_event('auth', 'Device authorized')
-    previous_task = getattr(app.state, 'page_count_task', None)
-    if previous_task and not previous_task.done():
-        previous_task.cancel()
-    app.state.page_count_task = asyncio.create_task(prewarm_page_counts(force=True, sid=sid))
     # Set the cookie on the response that is actually returned. Copying headers
     # off the injected Response also copied its `content-length: 0`, and
     # Starlette leaves a caller-supplied length alone — so the reply advertised
@@ -2886,16 +2721,21 @@ def logout(response: Response, kp_session: Optional[str] = Cookie(default=None))
     if kp_session:
         with db_connect() as conn:
             conn.execute('DELETE FROM sessions WHERE sid = ?', (kp_session,))
+        # Everything else keyed by this sid goes with it - otherwise the lock
+        # and the cached answers outlive the session that owned them, for as
+        # long as the process runs.
+        _refresh_locks.pop(kp_session, None)
+        profile_cache.pop(kp_session, None)
+        watched_statuses_cache.pop(kp_session, None)
     response.delete_cookie('kp_session', path='/')
     return {'status': 'ok'}
 
 
 
 @app.get('/explorer')
-async def api_explorer(path: str, query: str = '', download: bool = False, kp_session: Optional[str] = Cookie(default=None)):
+async def api_explorer(path: str, query: str = '', download: bool = False, session: Dict[str, Any] = Depends(current_session)):
     """Read-only authenticated API explorer. Tokens and sensitive headers are redacted."""
     clean_path = safe_explorer_path(path)
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     params = {}
     if query.strip():
         try:
@@ -2936,8 +2776,7 @@ async def api_explorer(path: str, query: str = '', download: bool = False, kp_se
     return result
 
 @app.api_route('/api/{path:path}', methods=['GET', 'POST', 'PUT', 'DELETE'])
-async def api_proxy(path: str, request: Request, kp_session: Optional[str] = Cookie(default=None)):
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+async def api_proxy(path: str, request: Request, session: Dict[str, Any] = Depends(current_session)):
     body = await request.body()
     headers = {'Authorization': f"Bearer {session['access_token']}"}
     if request.headers.get('content-type'):
@@ -3252,8 +3091,7 @@ def subtitle_to_vtt(text: str, offset: float = 0) -> str:
     return _shift_vtt('\n'.join(out), offset)
 
 @app.get('/subtitle')
-async def subtitle(url: str, request: Request, offset: float = 0, kp_session: Optional[str] = Cookie(default=None)):
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+async def subtitle(url: str, request: Request, offset: float = 0, session: Dict[str, Any] = Depends(current_session)):
     upstream, final_url = await open_media(url, media_headers(session, request))
     try:
         if upstream.status_code >= 400:
@@ -3298,13 +3136,12 @@ def _hls_audio_renditions(text: str) -> List[Dict[str, Any]]:
 
 
 @app.get('/media/audio-variants')
-async def media_audio_variants(url: str, request: Request, kp_session: Optional[str] = Cookie(default=None)):
+async def media_audio_variants(url: str, request: Request, session: Dict[str, Any] = Depends(current_session)):
     """Report the alternate audio renditions a KinoPub HLS variant exposes.
 
     When a variant declares two or more, the player can switch audio through
     hls.js alone: no remux, no restart, and seeking keeps working normally.
     """
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     upstream, final_url = await open_media(url, media_headers(session, request))
     try:
         if upstream.status_code >= 400:
@@ -3328,8 +3165,7 @@ async def media_audio_variants(url: str, request: Request, kp_session: Optional[
 
 
 @app.get('/hls')
-async def hls(url: str, request: Request, kp_session: Optional[str] = Cookie(default=None)):
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+async def hls(url: str, request: Request, session: Dict[str, Any] = Depends(current_session)):
     upstream, final_url = await open_media(url, media_headers(session, request))
     try:
         if upstream.status_code >= 400:
@@ -3566,7 +3402,7 @@ async def audio_hls_cleanup_loop() -> None:
 
 
 @app.post('/audio-hls/jobs')
-async def create_audio_hls_job(payload: AudioHlsPayload, request: Request, kp_session: Optional[str] = Cookie(default=None)):
+async def create_audio_hls_job(payload: AudioHlsPayload, request: Request, session: Dict[str, Any] = Depends(current_session)):
     # The only endpoint in this bridge that genuinely needs FFmpeg. Refused up
     # front with a message the player can show as-is, rather than letting the
     # subprocess fail somewhere inside a background job.
@@ -3575,8 +3411,7 @@ async def create_audio_hls_job(payload: AudioHlsPayload, request: Request, kp_se
                                  'Доступны только дорожки, которые есть в самом потоке.')
     if payload.track < 0 or payload.track > 128:
         raise HTTPException(400, 'Invalid audio track index')
-    sid = kp_session or ''
-    session = await refresh_if_needed(sid, session_get(kp_session))
+    sid = session['sid']
     safe_url = await validate_stream_url(payload.url)
     headers = media_headers(session, request)
     # Resolve and validate redirects with the same SSRF rules used by the normal relay.
@@ -3742,8 +3577,7 @@ async def audio_hls_file(job_id: str, filename: str, kp_session: Optional[str] =
 
 
 @app.get('/stream')
-async def stream(url: str, request: Request, kp_session: Optional[str] = Cookie(default=None)):
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+async def stream(url: str, request: Request, session: Dict[str, Any] = Depends(current_session)):
     upstream, final_url = await open_media(url, media_headers(session, request))
     if upstream.status_code >= 400:
         await upstream.aclose()
@@ -3814,45 +3648,91 @@ def put_settings(payload: SettingsPayload) -> Dict[str, Any]:
         conn.execute("INSERT INTO user_settings(profile,payload,updated_at) VALUES('default',?,?) ON CONFLICT(profile) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at", (json.dumps(data,ensure_ascii=False),time.time()))
     return data
 
+WATCHED_STATUSES_TTL = 120
+WATCHED_STATUSES_MAX_PAGES = 20
+WATCHED_STATUSES_BATCH = 5
+watched_statuses_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def _history_page_entries(payload: Any) -> List[Dict[str, Any]]:
+    history = payload.get('history') if isinstance(payload, dict) else None
+    return [entry for entry in history if isinstance(entry, dict)] if isinstance(history, list) else []
+
+
+def _collect_watched_statuses(entries: List[Dict[str, Any]], statuses: Dict[str, int]) -> None:
+    for entry in entries:
+        item = entry.get('item') if isinstance(entry.get('item'), dict) else {}
+        media = entry.get('media') if isinstance(entry.get('media'), dict) else {}
+        item_id = str(item.get('id') or entry.get('item_id') or '').strip()
+        if not item_id:
+            continue
+        status = _extract_watched_status(item)
+        if status == -1:
+            status = _extract_watched_status(media)
+        if status == -1:
+            status = 0  # Presence in history means playback at least started.
+        statuses[item_id] = max(statuses.get(item_id, -1), status)
+
+
 @app.get('/watching/statuses')
-async def watching_statuses(kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def watching_statuses(session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """Return watched statuses known by KinoPub history.
 
     Catalogue payloads remain the primary source because they can expose the
     exact ``watched`` state. History is used to enrich cards that omit it.
+
+    The frontend asks for this once per app start, and it used to walk up to
+    twenty history pages strictly one after another - twenty round trips to an
+    API that this bridge has repeatedly seen go slow or unreachable, all before
+    the first card could show a watched mark. Page 1 arrives with the real page
+    count in its own pagination, so the rest are fetched in small parallel
+    batches instead. Batches rather than one big gather: twenty simultaneous
+    requests at KinoPub is not neighbourly, and this endpoint has never been in
+    a hurry beyond the user's first screen.
     """
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
+    sid = session['sid']
+    cached = watched_statuses_cache.get(sid)
+    if cached and time.time() - cached['at'] < WATCHED_STATUSES_TTL:
+        return cached['data']
+
     statuses: Dict[str, int] = {}
-    page = 1
-    max_pages = 20
-    while page <= max_pages:
-        payload = await kino_get(session, 'v1/history', {'page': page, 'perpage': 50})
-        history = payload.get('history') if isinstance(payload, dict) else None
-        if not isinstance(history, list) or not history:
-            break
-        for entry in history:
-            if not isinstance(entry, dict):
+    first = await kino_get(session, 'v1/history', {'page': 1, 'perpage': 50})
+    entries = _history_page_entries(first)
+    _collect_watched_statuses(entries, statuses)
+
+    pagination = first.get('pagination') if isinstance(first, dict) else {}
+    try:
+        total_pages = int((pagination or {}).get('total') or 0)
+    except (TypeError, ValueError):
+        total_pages = 0
+    # A short page means there is nothing after it, whatever pagination claims.
+    last_page = 1 if len(entries) < 50 else min(total_pages or WATCHED_STATUSES_MAX_PAGES, WATCHED_STATUSES_MAX_PAGES)
+
+    page = 2
+    while page <= last_page:
+        batch = range(page, min(page + WATCHED_STATUSES_BATCH, last_page + 1))
+        payloads = await asyncio.gather(
+            *[kino_get(session, 'v1/history', {'page': n, 'perpage': 50}) for n in batch],
+            return_exceptions=True)
+        short_page = False
+        for payload in payloads:
+            # One failed page is not worth losing the marks the others carried.
+            if isinstance(payload, BaseException):
+                log_event('catalog', 'History page failed while collecting watched marks',
+                          {'error': f'{type(payload).__name__}: {payload}'})
+                short_page = True
                 continue
-            item = entry.get('item') if isinstance(entry.get('item'), dict) else {}
-            media = entry.get('media') if isinstance(entry.get('media'), dict) else {}
-            item_id = str(item.get('id') or entry.get('item_id') or '').strip()
-            if not item_id:
-                continue
-            status = _extract_watched_status(item)
-            if status == -1:
-                status = _extract_watched_status(media)
-            if status == -1:
-                status = 0  # Presence in history means playback at least started.
-            statuses[item_id] = max(statuses.get(item_id, -1), status)
-        pagination = payload.get('pagination') if isinstance(payload, dict) else {}
-        try:
-            total_pages = int((pagination or {}).get('total') or 0)
-        except (TypeError, ValueError):
-            total_pages = 0
-        if len(history) < 50 or (total_pages and page >= total_pages):
+            page_entries = _history_page_entries(payload)
+            _collect_watched_statuses(page_entries, statuses)
+            if len(page_entries) < 50:
+                short_page = True
+        if short_page:
             break
-        page += 1
-    return {'statuses': statuses, 'count': len(statuses)}
+        page += WATCHED_STATUSES_BATCH
+
+    result = {'statuses': statuses, 'count': len(statuses)}
+    watched_statuses_cache[sid] = {'at': time.time(), 'data': result}
+    return result
 
 
 def _progress_rows_from_watching(media_id: str, payload: Any) -> List[Dict[str, Any]]:
@@ -3901,7 +3781,7 @@ def _progress_rows_from_watching(media_id: str, payload: Any) -> List[Dict[str, 
 
 
 @app.get('/history')
-async def get_history(media_id: str = '', kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
+async def get_history(media_id: str = '', session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     """Позиции возобновления для одного тайтла, недавние первыми.
 
     Раньше здесь была своя таблица `watch_progress`, дублировавшая то, что
@@ -3917,7 +3797,6 @@ async def get_history(media_id: str = '', kp_session: Optional[str] = Cookie(def
     """
     if not media_id:
         return {'items': []}
-    session = await refresh_if_needed(kp_session or '', session_get(kp_session))
     try:
         payload = await kino_get(session, 'v1/watching', {'id': media_id})
     except HTTPException as exc:
@@ -3933,6 +3812,10 @@ async def get_history(media_id: str = '', kp_session: Optional[str] = Cookie(def
 async def put_history(payload: ProgressPayload, kp_session: Optional[str] = Cookie(default=None)) -> Dict[str, str]:
     completed = payload.completed or (payload.duration > 0 and payload.position / payload.duration >= .9)
     await _mirror_watch_progress(payload, completed, kp_session)
+    # This is the one thing that changes what /watching/statuses would answer,
+    # so it drops the cached copy rather than letting a finished episode stay
+    # unmarked for the rest of the TTL.
+    watched_statuses_cache.pop(kp_session or '', None)
     return {'status': 'ok'}
 
 

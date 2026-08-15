@@ -175,5 +175,75 @@ with TestClient(app, raise_server_exceptions=False) as client:
     r = client.get('/catalog/history?type=bogus')
     check('unknown history type -> 400', r.status_code == 400, f'HTTP {r.status_code}')
 
+    # /watching/statuses walks KinoPub's history pages. It used to do that one
+    # strictly sequential round trip at a time, up to twenty of them, before
+    # the first card could show a watched mark; the walk is now batched, which
+    # is exactly the kind of rewrite that hides an off-by-one. `kino_get` is
+    # stubbed so these are page-arithmetic checks, not upstream calls.
+    import app.main as main_mod
+
+    requested_pages = []
+
+    def history_stub(pages):
+        """`pages` maps page number -> (entry count, total_pages) or an Exception."""
+        async def fake_kino_get(session, endpoint, params=None):
+            page = int((params or {}).get('page') or 1)
+            requested_pages.append(page)
+            spec = pages.get(page, (0, len(pages)))
+            if isinstance(spec, BaseException):
+                raise spec
+            count, total = spec
+            return {'history': [{'item': {'id': 1000 + page * 100 + i, 'watched': 1}} for i in range(count)],
+                    'pagination': {'total': total}}
+        return fake_kino_get
+
+    real_kino_get = main_mod.kino_get
+
+    def statuses_with(pages):
+        del requested_pages[:]
+        main_mod.watched_statuses_cache.clear()
+        main_mod.kino_get = history_stub(pages)
+        try:
+            return client.get('/watching/statuses')
+        finally:
+            main_mod.kino_get = real_kino_get
+
+    r = statuses_with({1: (7, 1)})
+    check('a single short history page is one request, not twenty',
+          r.status_code == 200 and requested_pages == [1], f'HTTP {r.status_code} pages={requested_pages}')
+    check('and every entry on it is counted', r.json()['count'] == 7, r.json()['count'])
+
+    r = statuses_with({1: (50, 3), 2: (50, 3), 3: (12, 3)})
+    check('pagination total is honoured exactly - no page 4',
+          sorted(requested_pages) == [1, 2, 3], requested_pages)
+    check('marks from every page survive', r.json()['count'] == 112, r.json()['count'])
+
+    r = statuses_with({1: (50, 0), 2: (50, 0), 3: (4, 0)})
+    check('a missing total falls back to walking until a short page',
+          sorted(requested_pages)[:3] == [1, 2, 3] and max(requested_pages) <= 6, requested_pages)
+    check('and stops there', r.json()['count'] == 104, r.json()['count'])
+
+    # Pages 2-4 share one batch, so a failure on 2 costs exactly its own 50
+    # entries - the siblings alongside it still land (50 + 50 + 5).
+    r = statuses_with({1: (50, 4), 2: RuntimeError('upstream hiccup'), 3: (50, 4), 4: (5, 4)})
+    check('one failed page loses only its own marks, not the batch',
+          r.status_code == 200 and r.json()['count'] == 105, f'HTTP {r.status_code} {r.json().get("count")}')
+
+    # The cached answer must not cost an upstream call, and finishing an
+    # episode must not sit behind the TTL.
+    main_mod.watched_statuses_cache.clear()
+    main_mod.kino_get = history_stub({1: (3, 1)})
+    try:
+        client.get('/watching/statuses')
+        del requested_pages[:]
+        client.get('/watching/statuses')
+        check('a second call inside the TTL asks upstream for nothing', requested_pages == [], requested_pages)
+        client.put('/history', json={'item_id': '1', 'media_id': '1', 'position': 10, 'duration': 100})
+        del requested_pages[:]
+        client.get('/watching/statuses')
+        check('saving progress drops the cached copy', requested_pages == [1], requested_pages)
+    finally:
+        main_mod.kino_get = real_kino_get
+
 print(f'\n{len(failures)} FAILURE(S)' if failures else '\nAll checks passed')
 sys.exit(1 if failures else 0)
