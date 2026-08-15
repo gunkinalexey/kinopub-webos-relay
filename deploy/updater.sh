@@ -28,6 +28,12 @@ REQUEST="$UPDATE_DIR/requested"
 # скрипта, потому что status.json перезаписывается целиком при каждом
 # прогоне, а этот файл трогается только при фактическом обновлении.
 APPLIED_AT_FILE="$UPDATE_DIR/last_applied_at"
+# Автообновление. auto.json пишет приложение при сохранении настроек
+# (см. publish_auto_update), last_auto_date - этот скрипт: дата последнего
+# автоматического применения, чтобы за сутки оно случилось один раз, а не
+# на каждом тике таймера после наступления выбранного часа.
+AUTO_FILE="$UPDATE_DIR/auto.json"
+AUTO_DATE_FILE="$UPDATE_DIR/last_auto_date"
 HEALTH="${HEALTH:-http://localhost:8080/bridge/health}"
 HEALTH_TRIES="${HEALTH_TRIES:-30}"
 
@@ -175,6 +181,36 @@ do_update() {
   log "updated $before -> $after"
 }
 
+# Решить, пора ли обновляться самим. Читается ровно то, что положило
+# приложение; jq на хосте может не быть, а формат свой и предсказуемый.
+should_auto_update() {
+  [ -f "$AUTO_FILE" ] || return 1
+  grep -q '"enabled": *true' "$AUTO_FILE" || return 1
+  [ "${available:-false}" = "true" ] || return 1
+
+  local at now today last
+  at=$(sed -n 's/.*"at": *"\([0-9][0-9]:[0-9][0-9]\)".*/\1/p' "$AUTO_FILE")
+  [ -n "$at" ] || at="04:00"
+  now=$(date +%H:%M)
+  today=$(date +%F)
+  last=$(cat "$AUTO_DATE_FILE" 2>/dev/null || echo '')
+
+  # Первое знакомство с включённой галочкой не должно немедленно
+  # обновлять: пользователь выбирал ночной час, а не «сейчас». Помечаем
+  # сегодняшний день использованным, первый автопрогон будет завтра.
+  if [ -z "$last" ]; then
+    echo "$today" > "$AUTO_DATE_FILE"
+    log "auto-update armed for $at, first run tomorrow"
+    return 1
+  fi
+
+  [ "$today" != "$last" ] || return 1
+  # Строковое сравнение корректно: обе строки - HH:MM с ведущими нулями.
+  [ "$now" \> "$at" ] || [ "$now" = "$at" ] || return 1
+  echo "$today" > "$AUTO_DATE_FILE"
+  return 0
+}
+
 git fetch --quiet origin "$BRANCH" 2>/dev/null
 
 if [ -f "$REQUEST" ]; then
@@ -182,5 +218,11 @@ if [ -f "$REQUEST" ]; then
   log "update requested"
   do_update
 else
+  # write_status заполняет available/behind, на которые смотрит
+  # should_auto_update - поэтому сначала оно, а решение уже после.
   write_status idle ""
+  if should_auto_update; then
+    log "auto-update triggered"
+    do_update
+  fi
 fi

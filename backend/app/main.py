@@ -183,6 +183,7 @@ async def lifespan(app: FastAPI):
             shutil.rmtree(child, ignore_errors=True)
     app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30, connect=15), follow_redirects=False)
     app.state.audio_hls_cleanup_task = asyncio.create_task(audio_hls_cleanup_loop())
+    publish_auto_update(get_settings())
     yield
     for job in list(audio_hls_jobs.values()):
         process = job.get('process')
@@ -201,7 +202,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.102', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.104', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -235,6 +236,15 @@ class SettingsPayload(BaseModel):
     subtitles: str = 'off'
     subtitle_size: int = 100
     autoplay_next: bool = True
+    # Автообновление сервиса. Само обновление выполняет deploy/updater.sh на
+    # хосте (из контейнера пересобрать себя нельзя), поэтому это не флаг
+    # поведения бэкенда, а предпочтение, которое ему нужно передать - см.
+    # publish_auto_update ниже.
+    auto_update: bool = False
+    # Час суток по локальному времени хоста, 'HH:MM'. Часовая точность:
+    # выбирать минуты пультом мучительно, а таймер всё равно тикает раз в
+    # пять минут.
+    auto_update_at: str = '04:00'
     reduce_motion: bool = False
     history_episode_frames: bool = True
     app_icon: str = 'kinopub'
@@ -2272,6 +2282,43 @@ def health() -> Dict[str, Any]:
 # общем каталоге: status.json пишет скрипт, requested создаёт приложение.
 UPDATE_STATUS_FILE = 'status.json'
 UPDATE_REQUEST_FILE = 'requested'
+UPDATE_AUTO_FILE = 'auto.json'
+
+
+def normalize_update_time(value: Any) -> str:
+    """'HH:MM' по локальному времени хоста, часовая сетка."""
+    text = str(value or '').strip()
+    match = re.match(r'^(\d{1,2}):(\d{2})$', text)
+    hour = int(match.group(1)) if match else 4
+    minute = int(match.group(2)) if match else 0
+    hour = max(0, min(hour, 23))
+    minute = max(0, min(minute, 59))
+    return f'{hour:02d}:{minute:02d}'
+
+
+def publish_auto_update(settings: Dict[str, Any]) -> None:
+    """Передать обновлятору, хочет ли пользователь автообновления и когда.
+
+    Обновлятор живёт на хосте, вне Docker, и единственный канал к нему -
+    каталог update/, через который уже ходят status.json и requested. Так же
+    и здесь: файл вместо сигнала, потому что процессы даже не в одном
+    пространстве имён.
+
+    Пишется при каждом сохранении настроек и на старте, чтобы после чистого
+    развёртывания файл существовал, даже если настройки с тех пор не трогали.
+    """
+    if not UPDATE_DIR.is_dir():
+        return
+    payload = {
+        'enabled': bool(settings.get('auto_update')),
+        'at': normalize_update_time(settings.get('auto_update_at')),
+        'written_at': int(time.time()),
+    }
+    try:
+        (UPDATE_DIR / UPDATE_AUTO_FILE).write_text(
+            json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+    except OSError as exc:
+        log_event('update', 'Не удалось передать настройку автообновления', {'error': str(exc)})
 
 
 @app.get('/update/status')
@@ -2293,6 +2340,9 @@ def update_status() -> Dict[str, Any]:
     # Запрос уже подан и ещё не подобран скриптом - интерфейсу нужно знать,
     # чтобы не предлагать нажать кнопку второй раз.
     data['requested'] = (UPDATE_DIR / UPDATE_REQUEST_FILE).exists()
+    stored = get_settings()
+    data['auto_update'] = bool(stored.get('auto_update'))
+    data['auto_update_at'] = normalize_update_time(stored.get('auto_update_at'))
     return data
 
 
@@ -3824,8 +3874,10 @@ def get_settings() -> Dict[str, Any]:
 @app.put('/settings')
 def put_settings(payload: SettingsPayload) -> Dict[str, Any]:
     data=payload.model_dump()
+    data['auto_update_at']=normalize_update_time(data.get('auto_update_at'))
     with db_connect() as conn:
         conn.execute("INSERT INTO user_settings(profile,payload,updated_at) VALUES('default',?,?) ON CONFLICT(profile) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at", (json.dumps(data,ensure_ascii=False),time.time()))
+    publish_auto_update(data)
     return data
 
 WATCHED_STATUSES_TTL = 120

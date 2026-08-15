@@ -251,3 +251,5 @@ body.auth-locked .sidebar,body.auth-locked .content-shell{visibility:hidden;poin
    only make sense for a seekable VOD file. ---- */
 .player-layer.live .timeline,.player-layer.live .time-row,.player-layer.live #rewind,.player-layer.live #forward,.player-layer.live .player-selects{display:none}
 .player-icon-button:disabled,.player-icon-button.is-disabled{opacity:.35;cursor:default;pointer-events:none}
+.update-time-field{display:flex;align-items:center;gap:12px;margin-top:10px}
+.update-time-field select{width:auto;min-width:120px}
