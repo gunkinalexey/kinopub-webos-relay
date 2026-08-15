@@ -1836,6 +1836,23 @@ function clearSwitchMessage(resume){var clearMessage=function(){$('playerError')
 // come back - regularly more than the 10 s hls.js allows a CDN by default, and
 // a TV on Wi-Fi makes it worse. The retry budget is what the defaults are;
 // only the patience is different.
+// How much already-played video stays in the SourceBuffer. This was 600 s,
+// which came in with the initial commit and is explained nowhere - and the
+// forward buffer is the only one hls.js caps by bytes (maxBufferSize, 60 MB by
+// default). The back buffer is capped in *seconds* only, so its cost is
+// whatever the bitrate happens to be.
+//
+// Measured on a real stream from this account: 10.427 s segments of 13.8 MB,
+// i.e. 11.1 Mbit/s - so 600 s of back buffer asked the TV to hold 832 MB, and
+// a 4K rendition at ~35 Mbit/s would have asked for 2.6 GB. A webOS
+// SourceBuffer is typically 100-200 MB in total. Past that the appends start
+// failing, hls.js has to evict - and a 600 s back buffer is precisely an
+// instruction not to.
+//
+// 30 s covers three presses of the -10 s button without a refetch and costs
+// 42 MB at the measured bitrate, 131 MB even at a 4K one. Rewinding further
+// re-downloads a segment or two, which is a second of buffering, not a stall.
+var HLS_BACK_BUFFER=30;
 var HLS_FRAG_LOAD_POLICY={'default':{maxTimeToFirstByteMs:20000,maxLoadTimeMs:120000,
  timeoutRetry:{maxNumRetry:4,retryDelayMs:0,maxRetryDelayMs:0},
  errorRetry:{maxNumRetry:6,retryDelayMs:1000,maxRetryDelayMs:8000}}};
@@ -1958,7 +1975,7 @@ state.streamUrl=url;state.mode=mode||'direct';state.episodeId=episodeId||'';stat
 // load() discards the old text tracks, so the mounted subtitle must be rebuilt
 // even though the choice itself has not changed.
 state.subtitleMountKey='';var restored=false;function restorePlayback(){if(restored||switchSeq!==state.streamSwitchSeq)return;restored=true;if(!isAudioHls&&isFinite(video.duration)&&video.duration>0)state.playerOriginalDuration=video.duration;var target=isAudioHls?Math.max(0,resumePosition-offset):resumePosition;if(isFinite(video.duration)&&video.duration>0)target=Math.min(target,Math.max(0,video.duration-.25));try{if(target>0)video.currentTime=target;}catch(e){}state.playerResumePosition=resumePosition;state.playerSwitching=false;populateAudioMenu();populateSubtitleMenu();applySubtitleChoice(state.playerSubtitleChoice);if(state.playerAudioChoice!=='auto'&&!isAudioHls&&!state.audioHlsPreparing)setTimeout(reapplyAudioSelection,0);if(resumePaused){keepPlayerControlsVisible();return;}startPlayback(switchSeq);}
-var source=options.localSource?url:prox(url,state.mode);if(state.mode==='hls'&&window.Hls&&Hls.isSupported()){state.hlsManifestReady=false;state.hls=new Hls({enableWorker:true,lowLatencyMode:false,backBufferLength:600,maxBufferLength:90,fragLoadPolicy:HLS_FRAG_LOAD_POLICY});state.hls.attachMedia(video);state.hls.on(Hls.Events.MEDIA_ATTACHED,function(){if(switchSeq!==state.streamSwitchSeq)return;state.hls.loadSource(source);});state.hls.on(Hls.Events.MANIFEST_PARSED,function(){if(switchSeq!==state.streamSwitchSeq)return;state.hlsManifestReady=true;applyHlsLevelPreference(false);populateAudioMenu();populateSubtitleMenu();restorePlayback();reapplyAudioSelection();});state.hls.on(Hls.Events.AUDIO_TRACKS_UPDATED,function(){populateAudioMenu();reapplyAudioSelection();});state.hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED,function(){populateSubtitleMenu();});state.hls.on(Hls.Events.ERROR,function(evt,data){handleHlsError(data,switchSeq);});state.hls.on(Hls.Events.FRAG_BUFFERED,function(){noteHlsProgress(switchSeq);});video.onloadedmetadata=restorePlayback;video.oncanplay=restorePlayback;return;}state.hlsManifestReady=false;video.src=source;video.onloadedmetadata=restorePlayback;video.oncanplay=restorePlayback;watchDirectStall(switchSeq);}
+var source=options.localSource?url:prox(url,state.mode);if(state.mode==='hls'&&window.Hls&&Hls.isSupported()){state.hlsManifestReady=false;state.hls=new Hls({enableWorker:true,lowLatencyMode:false,backBufferLength:HLS_BACK_BUFFER,maxBufferLength:90,fragLoadPolicy:HLS_FRAG_LOAD_POLICY});state.hls.attachMedia(video);state.hls.on(Hls.Events.MEDIA_ATTACHED,function(){if(switchSeq!==state.streamSwitchSeq)return;state.hls.loadSource(source);});state.hls.on(Hls.Events.MANIFEST_PARSED,function(){if(switchSeq!==state.streamSwitchSeq)return;state.hlsManifestReady=true;applyHlsLevelPreference(false);populateAudioMenu();populateSubtitleMenu();restorePlayback();reapplyAudioSelection();});state.hls.on(Hls.Events.AUDIO_TRACKS_UPDATED,function(){populateAudioMenu();reapplyAudioSelection();});state.hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED,function(){populateSubtitleMenu();});state.hls.on(Hls.Events.ERROR,function(evt,data){handleHlsError(data,switchSeq);});state.hls.on(Hls.Events.FRAG_BUFFERED,function(){noteHlsProgress(switchSeq);});video.onloadedmetadata=restorePlayback;video.oncanplay=restorePlayback;return;}state.hlsManifestReady=false;video.src=source;video.onloadedmetadata=restorePlayback;video.oncanplay=restorePlayback;watchDirectStall(switchSeq);}
 function audioHlsCanSeek(target){if(!state.audioHlsActive)return true;var local=Number(target)-Number(state.audioHlsOffset||0);if(local<0)return false;try{if(video.seekable&&video.seekable.length){for(var i=0;i<video.seekable.length;i++)if(local>=video.seekable.start(i)-.25&&local<=video.seekable.end(i)-.1)return true;return false;}}catch(e){}var d=Number(video.duration)||0;return d>0&&local<d-.1;}
 function stopAudioHlsJob(jobId){if(!jobId)return;KPApi.stopAudioHls(jobId).catch(function(){});}
 function failAudioHls(message,fallbackResume,previousChoice,token){if(token!==state.audioHlsPollToken)return;if(state.audioHlsPendingJobId){stopAudioHlsJob(state.audioHlsPendingJobId);state.audioHlsPendingJobId='';}state.audioHlsPreparing=false;state.playerAudioChoice=previousChoice||'auto';populateAudioMenu();$('playerError').textContent=message||'Не удалось подготовить выбранную звуковую дорожку.';if(fallbackResume&&!fallbackResume.paused){startPlayback();}else keepPlayerControlsVisible();}

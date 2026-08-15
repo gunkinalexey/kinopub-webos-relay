@@ -298,5 +298,33 @@ with TestClient(app, raise_server_exceptions=False) as client:
     check('two live devices are two clients', body['clients_online'] == 2, body)
     main_mod.presence.clear()
 
+    # The grid draws a poster and a title, so the plot has no business riding
+    # along with 48 of them - measured through the real normaliser it was 37%
+    # of a catalogue page. The details screen re-fetches the item and gets the
+    # plot from there, so that one endpoint must keep it.
+    from app.main import normalize_catalog_item
+    raw_item = {'id': 7, 'title': 'Что-то', 'plot': 'Длинное описание, которое сетке не нужно.'}
+    check('a catalogue item carries no plot',
+          'description' not in normalize_catalog_item(raw_item), normalize_catalog_item(raw_item))
+    check('the details fetch asks for it explicitly and gets it',
+          normalize_catalog_item(raw_item, with_description=True).get('description')
+          == 'Длинное описание, которое сетке не нужно.',
+          normalize_catalog_item(raw_item, with_description=True).get('description'))
+
+    async def one_item(session, endpoint, params=None):
+        return {'item': raw_item, 'items': [raw_item], 'pagination': {'total': 1}}
+
+    real_get = main_mod.kino_get
+    main_mod.kino_get = one_item
+    try:
+        listed = client.get('/catalog/list?section=movie&feed=popular&page=0&perpage=48').json()
+        single = client.get('/catalog/items/7').json()
+    finally:
+        main_mod.kino_get = real_get
+    check('and the wire agrees: no plot in the list',
+          all('description' not in i for i in listed.get('items', [])),
+          listed.get('items'))
+    check('but the single item has one', bool(single.get('description')), sorted(single)[:8])
+
 print(f'\n{len(failures)} FAILURE(S)' if failures else '\nAll checks passed')
 sys.exit(1 if failures else 0)

@@ -742,7 +742,19 @@ def _extract_watched_status(raw: Dict[str, Any]) -> int:
     return -1
 
 
-def normalize_catalog_item(raw: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_catalog_item(raw: Dict[str, Any], with_description: bool = False) -> Dict[str, Any]:
+    """Normalise one catalogue item.
+
+    ``with_description`` is off by default because the grid never shows a
+    plot: it draws a poster and a title. Measured on a real item through
+    this very function, the description is 298 of its 807 bytes - 37%, or
+    14 KB of every 38 KB page of 48 - shipped to a TV that displays not one
+    character of it. The details screen, the only reader, always re-fetches
+    the item from `/catalog/items/{id}` and gets the plot from there.
+
+    Off by default rather than stripped afterwards, so a new list endpoint
+    is lean without having to remember anything.
+    """
     title = str(_pick_first(raw, ['title', 'name'], 'Без названия'))
     original = str(_pick_first(raw, ['original_title', 'original', 'title_original'], ''))
     if ' / ' in title and not original:
@@ -783,7 +795,7 @@ def normalize_catalog_item(raw: Dict[str, Any]) -> Dict[str, Any]:
         'kinopoisk', 'ratings.kinopoisk', 'ratings.kp',
         'rating.kinopoisk', 'rating.kp', 'external_ratings.kinopoisk'
     ])
-    return {
+    item: Dict[str, Any] = {
         'id': item_id,
         'type': str(raw.get('type') or 'movie'),
         'subtype': raw.get('subtype'),
@@ -798,7 +810,6 @@ def normalize_catalog_item(raw: Dict[str, Any]) -> Dict[str, Any]:
         'poster': poster,
         'backdrop': backdrop,
         'backdrop_fallback': poster if backdrop != poster else '',
-        'description': str(_pick_first(raw, ['plot', 'description', 'overview'], '')),
         'watched': _extract_watched_status(raw),
         # Catalogue list payloads (unlike a single item's detail/media node)
         # never carry subtitle info, so the grid card can only be honest about
@@ -811,6 +822,9 @@ def normalize_catalog_item(raw: Dict[str, Any]) -> Dict[str, Any]:
         # one `v1/watching/serials?subscribed=1` filters on.
         'subscribed': bool(raw.get('subscribed')),
     }
+    if with_description:
+        item['description'] = str(_pick_first(raw, ['plot', 'description', 'overview'], ''))
+    return item
 
 
 def extract_catalog_items(payload: Any) -> List[Dict[str, Any]]:
@@ -2011,7 +2025,7 @@ def _item_details(raw: Dict[str, Any], media: List[Dict[str, Any]]) -> Dict[str,
 async def catalog_item(item_id: str, session: Dict[str, Any] = Depends(current_session)) -> Dict[str, Any]:
     payload = await kino_get(session, f'v1/items/{item_id}', {})
     raw_item = payload.get('item') if isinstance(payload, dict) and isinstance(payload.get('item'), dict) else payload
-    item = normalize_catalog_item(raw_item if isinstance(raw_item, dict) else {'id': item_id})
+    item = normalize_catalog_item(raw_item if isinstance(raw_item, dict) else {'id': item_id}, with_description=True)
     media = collect_media(payload)
     item.update(_item_details(raw_item if isinstance(raw_item, dict) else {}, media))
     item['media'] = media
