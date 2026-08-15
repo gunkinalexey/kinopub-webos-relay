@@ -1,5 +1,5 @@
 (function(){'use strict';
-var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:imageCacheVersion(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,watchingView:'new',watchingItems:null,watchingAllItems:null,similarToken:0,serverFfmpeg:null,bookmarkFolders:null,bookmarkFolder:null,collectionSort:'new',collectionId:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,serverOptions:[],serverSelected:null,updateStatus:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
+var state={route:'popular',settings:{stream_mode:'auto',app_icon:'kinopub'},current:null,authPoll:null,authTick:null,streamUrl:'',mode:'direct',episodeId:'',episodeSeason:null,episodeNumber:null,catalogCache:{},catalogRequest:0,cacheVersion:imageCacheVersion(),catalogPages:{},catalogTotals:{},catalogFilters:{},filterGenres:{},filterCountries:null,filterPanelOpen:false,filterRangeEdit:null,watchingView:'new',watchingItems:null,watchingAllItems:null,similarToken:0,serverFfmpeg:null,bookmarkFolders:null,bookmarkFolder:null,collectionSort:'new',collectionId:null,searchTimer:null,searchSeq:0,suggestionIndex:-1,searchMode:'all',currentSuggestions:[],profile:null,profileCheckedAt:0,authenticated:false,appInitialized:false,authRequired:false,sessionExpired:false,watchedMap:{},historyType:'',mediaCaps:null,deviceCaps:null,capsSync:null,serverOptions:[],serverSelected:null,updateStatus:null,hdrAttempt:false,hdrFellBack:false,detailsTab:'plot',detailsSeason:0,detailsReturn:'catalogScreen',detailsFocus:null,playerResumePosition:0,playerSwitching:false,playerStreams:[],playerSubtitles:[],playerAudios:[],playerQualityIndex:'',playerSubtitleChoice:'off',playerAudioChoice:'auto',audioApplyTimer:null,subtitleApplyTimer:null,subtitleMountKey:'',playerOriginalDuration:0,hls:null,hlsManifestReady:false,hlsFellBack:false,hlsNetworkRecoveries:0,hlsMediaRecoveries:0,hlsRecoveryTimer:null,hlsWarnReports:0,hlsWarnAt:0,audioHlsActive:false,audioHlsOffset:0,audioHlsJobId:'',audioHlsPendingJobId:'',audioHlsPollToken:0,audioHlsPreparing:false,audioHlsSelectedIndex:-1,baseStreamUrl:'',baseStreamMode:'direct',streamSwitchSeq:0,expectedTracks:0,altAudioProbe:{},altAudioUrl:'',pendingAltAudioIndex:-1};
 var $=function(id){return document.getElementById(id);},video=$('video');
 // Every backend call that needs a session (catalog, history, profile, item
 // details...) raises a real HTTP 401 the moment the cookie is gone or
@@ -1827,18 +1827,140 @@ function reapplyAudioSelection(){if(state.audioHlsActive||state.audioHlsPreparin
  // The variant was reloaded specifically for this track and still cannot
  // provide it: hand over to the server-side remux.
  if(isFinite(pending)&&pending>=0&&(state.hlsManifestReady||video.readyState>=1)){state.pendingAltAudioIndex=-1;prepareAudioHls(wanted,null,'auto');}}
-function destroyHls(){if(state.hls){try{state.hls.destroy();}catch(e){}state.hls=null;}state.hlsManifestReady=false;}
+function destroyHls(){if(state.hlsRecoveryTimer){clearTimeout(state.hlsRecoveryTimer);state.hlsRecoveryTimer=null;}if(state.hls){try{state.hls.destroy();}catch(e){}state.hls=null;}state.hlsManifestReady=false;}
 function logicalCurrentTime(){return Math.max(0,(state.audioHlsActive?Number(state.audioHlsOffset)||0:0)+(Number(video.currentTime)||0));}
 function logicalDuration(){if(state.playerOriginalDuration>0)return state.playerOriginalDuration;var d=Math.max(0,Number(video.duration)||0);return state.audioHlsActive?d+(Number(state.audioHlsOffset)||0):d;}
 function currentResume(){var livePosition=logicalCurrentTime();if(livePosition>0)state.playerResumePosition=livePosition;return {position:Math.max(livePosition,Number(state.playerResumePosition)||0),paused:video.paused||video.ended};}
 function prox(url,mode){return mode==='relay'?KPApi.streamProxyUrl(url):mode==='hls'?KPApi.hlsProxyUrl(url):url;}
 function clearSwitchMessage(resume){var clearMessage=function(){$('playerError').textContent='';video.removeEventListener('playing',clearMessage);video.removeEventListener('canplay',clearMessage);};video.addEventListener(resume.paused?'canplay':'playing',clearMessage);}
+// A fragment here is not fetched from a CDN but from our own relay, which has
+// to resolve, connect and follow KinoPub's redirect before the first byte can
+// come back - regularly more than the 10 s hls.js allows a CDN by default, and
+// a TV on Wi-Fi makes it worse. The retry budget is what the defaults are;
+// only the patience is different.
+var HLS_FRAG_LOAD_POLICY={'default':{maxTimeToFirstByteMs:20000,maxLoadTimeMs:120000,
+ timeoutRetry:{maxNumRetry:4,retryDelayMs:0,maxRetryDelayMs:0},
+ errorRetry:{maxNumRetry:6,retryDelayMs:1000,maxRetryDelayMs:8000}}};
+// hls.js stops dead after a fatal error: it will not fetch another fragment
+// until the page calls startLoad()/recoverMediaError() itself. This handler
+// used to only print the error into the status line, so a single failed
+// segment - one slow response from the relay, one 401 while the token was
+// being refreshed, one abort during a seek - ended playback for good.
+//
+// Three network rungs, not more: measured against the real library, hls.js
+// retries a fragment six times over ~30 s of its own before it declares the
+// error fatal, and startLoad() hands it a fresh budget. So every rung here
+// costs the user another half-minute of "восстанавливаем", and past the third
+// one they are better served by relay than by a fourth identical wait.
+var HLS_NETWORK_RETRIES=3,HLS_MEDIA_RETRIES=2,HLS_RETRY_BASE_MS=400;
+function resetHlsRecovery(){if(state.hlsRecoveryTimer){clearTimeout(state.hlsRecoveryTimer);state.hlsRecoveryTimer=null;}state.hlsNetworkRecoveries=0;state.hlsMediaRecoveries=0;state.hlsWarnReports=0;state.hlsWarnAt=0;}
+// The HTTP status and the fragment URL are the only things that say *why* a
+// segment failed, and hls.js drops them once the error is reported. They go to
+// the debug log so Диагностика can show the real reason afterwards instead of
+// the bare "fragLoadError" the status line used to end on.
+function hlsErrorInfo(data){
+ var response=(data&&data.response)||{},frag=(data&&data.frag)||{};
+ return {details:(data&&data.details)||'',type:(data&&data.type)||'',fatal:!!(data&&data.fatal),
+  code:Number(response.code)||0,text:String(response.text||'').slice(0,120),
+  url:String(frag.url||(data&&data.url)||state.streamUrl||'').slice(0,300),
+  sn:frag.sn===undefined?'':frag.sn,position:Math.round(logicalCurrentTime()),
+  mode:state.audioHlsActive?'audio-hls':state.mode,
+  recoveries:(state.hlsNetworkRecoveries||0)+'/'+(state.hlsMediaRecoveries||0)};
+}
+function reportHlsError(data){
+ // One failing fragment is not one event: hls.js retries it six times and
+ // reports each attempt, so a single incident arrives as a burst of identical
+ // rows. One row per burst keeps every distinct incident visible in a debug log
+ // that holds 200 entries for the whole app - a flat "first N of the session"
+ // cap would have been spent entirely on the first incident's own retries.
+ if(!data||!data.fatal){
+  var now=Date.now();
+  if((state.hlsWarnReports||0)>=8||now-(state.hlsWarnAt||0)<10000)return;
+  state.hlsWarnReports=(state.hlsWarnReports||0)+1;state.hlsWarnAt=now;
+ }
+ KPApi.report(data&&data.fatal?'HLS fatal error':'HLS error',hlsErrorInfo(data),'media').catch(function(){});
+}
+// Any fragment that made it through means the ladder can start from scratch.
+// Without this a three-hour film still died on its sixth unrelated hiccup.
+function noteHlsProgress(switchSeq){
+ if(switchSeq!==state.streamSwitchSeq)return;
+ if(!state.hlsNetworkRecoveries&&!state.hlsMediaRecoveries)return;
+ state.hlsNetworkRecoveries=0;state.hlsMediaRecoveries=0;
+ $('playerError').textContent='';
+}
+// Last rung: relay hands the same file over as a progressive stream, so the
+// player keeps the position and loses nothing but the rendition switching.
+function fallbackFromHls(){
+ // A locally remuxed track only exists as HLS - switching away would silently
+ // drop the audio track the user picked, and its own ladder handles failures.
+ // Live TV has no alternative URL either (streamUrlForGroup returns '').
+ if(state.audioHlsActive||state.audioHlsPreparing||state.hlsFellBack)return false;
+ var group=currentQualityGroup(),url=streamUrlForGroup(group,'relay');
+ if(!url||url===state.streamUrl)return false;
+ state.hlsFellBack=true;
+ var resume=currentResume();
+ $('playerError').textContent='HLS не восстановился, переключаемся на relay…';
+ KPApi.report('HLS gave up, switched to relay',{position:Math.round(resume.position)},'media').catch(function(){});
+ openUrl(url,'relay',state.episodeId,resume);
+ clearSwitchMessage(resume);
+ return true;
+}
+function failHls(message,data){
+ state.playerSwitching=false;
+ var position=logicalCurrentTime();
+ if(position>0)state.playerResumePosition=position;
+ $('playerError').textContent=message+' ('+((data&&data.details)||'HLS')+').'+(state.playerResumePosition>0?' Позиция '+fmt(state.playerResumePosition)+' сохранена.':'');
+}
+function recoverHlsNetwork(data,switchSeq){
+ var details=String((data&&data.details)||'');
+ // A playlist that will not load at all is not a fragment hiccup: retrying the
+ // same dead URL six times only hides it behind six identical failures.
+ if(details.indexOf('manifestLoad')===0||details==='manifestParsingError'){if(!fallbackFromHls())failHls('Не удалось загрузить HLS-плейлист',data);return;}
+ if(state.hlsNetworkRecoveries>=HLS_NETWORK_RETRIES){if(!fallbackFromHls())failHls('Поток не восстановился за '+HLS_NETWORK_RETRIES+' попыток',data);return;}
+ state.hlsNetworkRecoveries++;
+ $('playerError').textContent='Поток прервался, восстанавливаем… ('+state.hlsNetworkRecoveries+'/'+HLS_NETWORK_RETRIES+')';
+ // Backing off matters when the relay is refusing for a moment (token refresh,
+ // upstream 5xx): retrying instantly burns the whole budget inside a second
+ // and drops to relay while the stream itself was fine.
+ var delay=Math.min(4000,HLS_RETRY_BASE_MS*Math.pow(2,state.hlsNetworkRecoveries-1));
+ if(state.hlsRecoveryTimer)clearTimeout(state.hlsRecoveryTimer);
+ state.hlsRecoveryTimer=setTimeout(function(){
+  state.hlsRecoveryTimer=null;
+  if(switchSeq!==state.streamSwitchSeq||!state.hls)return;
+  // No argument: hls.js resumes from the element's own position, which after a
+  // failed seek is already the position the user asked for.
+  try{state.hls.startLoad();}catch(e){if(!fallbackFromHls())failHls('Не удалось перезапустить загрузку',data);}
+ },delay);
+}
+function recoverHlsMedia(data,switchSeq){
+ if(switchSeq!==state.streamSwitchSeq||!state.hls)return;
+ if(state.hlsMediaRecoveries>=HLS_MEDIA_RETRIES){if(!fallbackFromHls())failHls('Декодер не смог продолжить поток',data);return;}
+ state.hlsMediaRecoveries++;
+ $('playerError').textContent='Восстанавливаем декодирование…';
+ try{
+  // A media error that survives one recovery is usually an audio codec the
+  // decoder cannot follow across the discontinuity, which is what the swap is
+  // for. hls.js documents this exact pair as the second attempt.
+  if(state.hlsMediaRecoveries>1&&state.hls.swapAudioCodec)state.hls.swapAudioCodec();
+  state.hls.recoverMediaError();
+ }catch(e){if(!fallbackFromHls())failHls('Не удалось восстановить декодирование',data);}
+}
+function handleHlsError(data,switchSeq){
+ if(switchSeq!==state.streamSwitchSeq)return;
+ reportHlsError(data);
+ if(!data||!data.fatal||!state.hls)return;
+ // Compared as plain strings rather than through Hls.ErrorTypes.*: this ladder
+ // is exercised by the regression suite, which runs without the library.
+ if(data.type==='networkError')recoverHlsNetwork(data,switchSeq);
+ else if(data.type==='mediaError')recoverHlsMedia(data,switchSeq);
+ else if(!fallbackFromHls())failHls('Ошибка HLS',data);
+}
 function openUrl(url,mode,episodeId,resume,options){options=options||{};var isAudioHls=!!options.audioHls,offset=isAudioHls?Math.max(0,Number(options.offset)||0):0;if(!isAudioHls){state.audioHlsActive=false;state.audioHlsOffset=0;state.audioHlsJobId='';state.audioHlsSelectedIndex=-1;state.baseStreamUrl=url;state.baseStreamMode=mode||'direct';}else{state.audioHlsActive=true;state.audioHlsOffset=offset;state.audioHlsJobId=options.jobId||'';state.audioHlsSelectedIndex=Number(options.listIndex);}
-state.streamUrl=url;state.mode=mode||'direct';state.episodeId=episodeId||'';state.streamSwitchSeq=(state.streamSwitchSeq||0)+1;var switchSeq=state.streamSwitchSeq,resumePosition=resume&&isFinite(resume.position)?Math.max(0,Number(resume.position)):Math.max(0,Number(state.playerResumePosition)||0),resumePaused=!!(resume&&resume.paused);state.playerResumePosition=Math.max(Number(state.playerResumePosition)||0,resumePosition);state.playerSwitching=true;$('playerMode').textContent=isAudioHls?'AUDIO HLS':state.mode.toUpperCase();if($('playerStreamMode')&&!isAudioHls)$('playerStreamMode').value=state.mode;video.pause();video.onloadedmetadata=null;video.oncanplay=null;destroyHls();video.removeAttribute('src');video.load();
+state.streamUrl=url;state.mode=mode||'direct';state.episodeId=episodeId||'';state.streamSwitchSeq=(state.streamSwitchSeq||0)+1;var switchSeq=state.streamSwitchSeq,resumePosition=resume&&isFinite(resume.position)?Math.max(0,Number(resume.position)):Math.max(0,Number(state.playerResumePosition)||0),resumePaused=!!(resume&&resume.paused);state.playerResumePosition=Math.max(Number(state.playerResumePosition)||0,resumePosition);state.playerSwitching=true;resetHlsRecovery();$('playerMode').textContent=isAudioHls?'AUDIO HLS':state.mode.toUpperCase();if($('playerStreamMode')&&!isAudioHls)$('playerStreamMode').value=state.mode;video.pause();video.onloadedmetadata=null;video.oncanplay=null;destroyHls();video.removeAttribute('src');video.load();
 // load() discards the old text tracks, so the mounted subtitle must be rebuilt
 // even though the choice itself has not changed.
 state.subtitleMountKey='';var restored=false;function restorePlayback(){if(restored||switchSeq!==state.streamSwitchSeq)return;restored=true;if(!isAudioHls&&isFinite(video.duration)&&video.duration>0)state.playerOriginalDuration=video.duration;var target=isAudioHls?Math.max(0,resumePosition-offset):resumePosition;if(isFinite(video.duration)&&video.duration>0)target=Math.min(target,Math.max(0,video.duration-.25));try{if(target>0)video.currentTime=target;}catch(e){}state.playerResumePosition=resumePosition;state.playerSwitching=false;populateAudioMenu();populateSubtitleMenu();applySubtitleChoice(state.playerSubtitleChoice);if(state.playerAudioChoice!=='auto'&&!isAudioHls&&!state.audioHlsPreparing)setTimeout(reapplyAudioSelection,0);if(resumePaused){keepPlayerControlsVisible();return;}startPlayback(switchSeq);}
-var source=options.localSource?url:prox(url,state.mode);if(state.mode==='hls'&&window.Hls&&Hls.isSupported()){state.hlsManifestReady=false;state.hls=new Hls({enableWorker:true,lowLatencyMode:false,backBufferLength:600,maxBufferLength:90});state.hls.attachMedia(video);state.hls.on(Hls.Events.MEDIA_ATTACHED,function(){if(switchSeq!==state.streamSwitchSeq)return;state.hls.loadSource(source);});state.hls.on(Hls.Events.MANIFEST_PARSED,function(){if(switchSeq!==state.streamSwitchSeq)return;state.hlsManifestReady=true;applyHlsLevelPreference(false);populateAudioMenu();populateSubtitleMenu();restorePlayback();reapplyAudioSelection();});state.hls.on(Hls.Events.AUDIO_TRACKS_UPDATED,function(){populateAudioMenu();reapplyAudioSelection();});state.hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED,function(){populateSubtitleMenu();});state.hls.on(Hls.Events.ERROR,function(evt,data){if(data&&data.fatal){$('playerError').textContent='Ошибка HLS: '+(data.details||data.type||'неизвестная ошибка');}});video.onloadedmetadata=restorePlayback;video.oncanplay=restorePlayback;return;}state.hlsManifestReady=false;video.src=source;video.onloadedmetadata=restorePlayback;video.oncanplay=restorePlayback;watchDirectStall(switchSeq);}
+var source=options.localSource?url:prox(url,state.mode);if(state.mode==='hls'&&window.Hls&&Hls.isSupported()){state.hlsManifestReady=false;state.hls=new Hls({enableWorker:true,lowLatencyMode:false,backBufferLength:600,maxBufferLength:90,fragLoadPolicy:HLS_FRAG_LOAD_POLICY});state.hls.attachMedia(video);state.hls.on(Hls.Events.MEDIA_ATTACHED,function(){if(switchSeq!==state.streamSwitchSeq)return;state.hls.loadSource(source);});state.hls.on(Hls.Events.MANIFEST_PARSED,function(){if(switchSeq!==state.streamSwitchSeq)return;state.hlsManifestReady=true;applyHlsLevelPreference(false);populateAudioMenu();populateSubtitleMenu();restorePlayback();reapplyAudioSelection();});state.hls.on(Hls.Events.AUDIO_TRACKS_UPDATED,function(){populateAudioMenu();reapplyAudioSelection();});state.hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED,function(){populateSubtitleMenu();});state.hls.on(Hls.Events.ERROR,function(evt,data){handleHlsError(data,switchSeq);});state.hls.on(Hls.Events.FRAG_BUFFERED,function(){noteHlsProgress(switchSeq);});video.onloadedmetadata=restorePlayback;video.oncanplay=restorePlayback;return;}state.hlsManifestReady=false;video.src=source;video.onloadedmetadata=restorePlayback;video.oncanplay=restorePlayback;watchDirectStall(switchSeq);}
 function audioHlsCanSeek(target){if(!state.audioHlsActive)return true;var local=Number(target)-Number(state.audioHlsOffset||0);if(local<0)return false;try{if(video.seekable&&video.seekable.length){for(var i=0;i<video.seekable.length;i++)if(local>=video.seekable.start(i)-.25&&local<=video.seekable.end(i)-.1)return true;return false;}}catch(e){}var d=Number(video.duration)||0;return d>0&&local<d-.1;}
 function stopAudioHlsJob(jobId){if(!jobId)return;KPApi.stopAudioHls(jobId).catch(function(){});}
 function failAudioHls(message,fallbackResume,previousChoice,token){if(token!==state.audioHlsPollToken)return;if(state.audioHlsPendingJobId){stopAudioHlsJob(state.audioHlsPendingJobId);state.audioHlsPendingJobId='';}state.audioHlsPreparing=false;state.playerAudioChoice=previousChoice||'auto';populateAudioMenu();$('playerError').textContent=message||'Не удалось подготовить выбранную звуковую дорожку.';if(fallbackResume&&!fallbackResume.paused){startPlayback();}else keepPlayerControlsVisible();}
@@ -1915,7 +2037,7 @@ function playChannel(ch){
  if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);
  state.audioHlsJobId='';state.audioHlsPendingJobId='';
  if(!ensureSubscriptionForPlayback()){openSubscription();return;}
- state.audioHlsPollToken++;state.audioHlsPreparing=false;state.audioHlsActive=false;state.audioHlsOffset=0;state.audioHlsSelectedIndex=-1;state.playerAudioChoice='auto';state.playerOriginalDuration=0;state.hdrFellBack=false;state.playerResumePosition=0;
+ state.audioHlsPollToken++;state.audioHlsPreparing=false;state.audioHlsActive=false;state.audioHlsOffset=0;state.audioHlsSelectedIndex=-1;state.playerAudioChoice='auto';state.playerOriginalDuration=0;state.hdrFellBack=false;state.hlsFellBack=false;state.playerResumePosition=0;
  state.current={id:'tv-'+ch.id,title:ch.title,live:true};
  state.episodeSeason=null;state.episodeNumber=null;
  $('playerTitle').textContent=ch.title;
@@ -1928,7 +2050,7 @@ function playChannel(ch){
  openUrl(ch.stream,'hls','',undefined);
  $('playerMode').textContent='В ЭФИРЕ';
 }
-function play(item,episode,startAt){$('playerLayer').classList.remove('live');enterPlayerFullscreen();state.playerResumePosition=Math.max(0,Number(startAt)||0);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);state.audioHlsJobId='';state.audioHlsPendingJobId='';if(!ensureSubscriptionForPlayback()){openSubscription();return;}state.audioHlsPollToken++;state.audioHlsPreparing=false;state.audioHlsActive=false;state.audioHlsOffset=0;state.audioHlsSelectedIndex=-1;state.playerAudioChoice='auto';state.playerOriginalDuration=0;state.hdrFellBack=false;state.current=item;state.episodeSeason=null;state.episodeNumber=null;$('playerTitle').textContent=item.title+(episode&&episode.title?' · '+episode.title:'');$('playerLayer').classList.remove('hidden');showPlayerControls();$('playerError').textContent='Получаем ссылку на видео…';var mediaId=episode&&(episode.media_id||episode.id);(state.capsSync||Promise.resolve()).catch(function(){}).then(function(){return KPApi.play(item.id,mediaId);}).then(function(result){var st=result.selected||((result.streams||[])[0]);if(!st||!st.url)throw new Error('Ссылка на видео не найдена');preparePlayerOptions(result,st);$('playerError').textContent='';var group=currentQualityGroup(),preferred=preferredModeFor(group),initialUrl=streamUrlForGroup(group,preferred)||st.url;state.hdrAttempt=preferred==='direct'&&isHevcGroup(group);state.episodeSeason=(result.media&&result.media.season)||null;state.episodeNumber=(result.media&&result.media.episode)||null;openUrl(initialUrl,preferred,(result.media&&result.media.id)||mediaId||'');}).catch(function(err){$('playerError').textContent='Не удалось получить поток: '+(err&&err.message?err.message:String(err));KPApi.report('Resolve stream failed',{item_id:item.id,error:String(err)},'media').catch(function(){});});}
+function play(item,episode,startAt){$('playerLayer').classList.remove('live');enterPlayerFullscreen();state.playerResumePosition=Math.max(0,Number(startAt)||0);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);state.audioHlsJobId='';state.audioHlsPendingJobId='';if(!ensureSubscriptionForPlayback()){openSubscription();return;}state.audioHlsPollToken++;state.audioHlsPreparing=false;state.audioHlsActive=false;state.audioHlsOffset=0;state.audioHlsSelectedIndex=-1;state.playerAudioChoice='auto';state.playerOriginalDuration=0;state.hdrFellBack=false;state.hlsFellBack=false;state.current=item;state.episodeSeason=null;state.episodeNumber=null;$('playerTitle').textContent=item.title+(episode&&episode.title?' · '+episode.title:'');$('playerLayer').classList.remove('hidden');showPlayerControls();$('playerError').textContent='Получаем ссылку на видео…';var mediaId=episode&&(episode.media_id||episode.id);(state.capsSync||Promise.resolve()).catch(function(){}).then(function(){return KPApi.play(item.id,mediaId);}).then(function(result){var st=result.selected||((result.streams||[])[0]);if(!st||!st.url)throw new Error('Ссылка на видео не найдена');preparePlayerOptions(result,st);$('playerError').textContent='';var group=currentQualityGroup(),preferred=preferredModeFor(group),initialUrl=streamUrlForGroup(group,preferred)||st.url;state.hdrAttempt=preferred==='direct'&&isHevcGroup(group);state.episodeSeason=(result.media&&result.media.season)||null;state.episodeNumber=(result.media&&result.media.episode)||null;openUrl(initialUrl,preferred,(result.media&&result.media.id)||mediaId||'');}).catch(function(err){$('playerError').textContent='Не удалось получить поток: '+(err&&err.message?err.message:String(err));KPApi.report('Resolve stream failed',{item_id:item.id,error:String(err)},'media').catch(function(){});});}
 function switchStreamMode(mode){if(!mode)return;var group=currentQualityGroup(),url=streamUrlForGroup(group,mode);if(!url){$('playerError').textContent='Для выбранного режима нет ссылки на поток.';return;}if(!state.audioHlsActive&&!state.audioHlsPreparing&&mode===state.mode)return;state.audioHlsPollToken++;state.audioHlsPreparing=false;if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);state.audioHlsPendingJobId='';state.playerAudioChoice='auto';state.pendingAltAudioIndex=-1;state.altAudioUrl='';populateAudioMenu();var resume=currentResume();$('playerError').textContent='Переключаем поток…';openUrl(url,mode,state.episodeId,resume);clearSwitchMessage(resume);}
 function switchQuality(index){var group=state.playerStreams[Number(index)];if(!group)return;state.playerQualityIndex=String(index);
  // In HLS mode every entry points at the same master playlist, so reloading

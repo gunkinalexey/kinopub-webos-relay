@@ -200,7 +200,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title='KinoPub webOS bridge', version='0.9.99', lifespan=lifespan)
+app = FastAPI(title='KinoPub webOS bridge', version='0.9.100', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:8080').split(',')],
@@ -328,21 +328,49 @@ def require_credentials() -> None:
         raise HTTPException(503, 'KINOPUB_CLIENT_ID and KINOPUB_CLIENT_SECRET are not configured')
 
 
+# Serialised per session, and shared with the 401-triggered path below: both
+# spend the same rotating refresh token, and KinoPub invalidates the old one
+# the moment a new pair is issued.
+_refresh_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _refresh_lock(sid: str) -> asyncio.Lock:
+    lock = _refresh_locks.get(sid)
+    if lock is None:
+        lock = _refresh_locks[sid] = asyncio.Lock()
+    return lock
+
+
 async def refresh_if_needed(sid: str, session: Dict[str, Any]) -> Dict[str, Any]:
     if session['expires_at'] > time.time():
         return session
     refresh_token = session.get('refresh_token')
     if not refresh_token:
         raise HTTPException(401, 'Session expired')
-    params = {'grant_type': 'refresh_token', 'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET, 'refresh_token': refresh_token}
-    upstream = await app.state.http.post(f'{API_BASE}/oauth2/token', params=params)
-    if upstream.status_code >= 400:
-        raise HTTPException(401, 'Could not refresh KinoPub token')
-    data = upstream.json()
-    session.update({'access_token': data['access_token'], 'refresh_token': data.get('refresh_token', refresh_token), 'expires_at': time.time() + int(data.get('expires_in', 3600)) - 60})
-    session_save(sid, session)
-    log_event('auth', 'Access token refreshed')
-    return session
+    # Every HLS fragment goes through /stream, so an expiry that falls in the
+    # middle of a film arrives here as a burst of parallel requests - and a
+    # seek makes that burst wider still. Unserialised, each one posted its own
+    # refresh, the first rotated the token out from under the rest, and they
+    # came back 401: hls.js saw a run of failed fragments, gave up with
+    # fragLoadError and playback was over. One refresh per session, the others
+    # wait for it and reuse the result.
+    async with _refresh_lock(sid):
+        current = session_get(sid)
+        # Someone else refreshed while this request waited for the lock.
+        if current['expires_at'] > time.time():
+            return current
+        refresh_token = current.get('refresh_token') or refresh_token
+        params = {'grant_type': 'refresh_token', 'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET, 'refresh_token': refresh_token}
+        upstream = await app.state.http.post(f'{API_BASE}/oauth2/token', params=params)
+        if upstream.status_code >= 400:
+            raise HTTPException(401, 'Could not refresh KinoPub token')
+        data = upstream.json()
+        current.update({'access_token': data['access_token'], 'refresh_token': data.get('refresh_token', refresh_token), 'expires_at': time.time() + int(data.get('expires_in', 3600)) - 60})
+        session_save(sid, current)
+        log_event('auth', 'Access token refreshed')
+        # The caller passed this dict in and may keep using it after the call.
+        session.update(current)
+        return current
 
 
 
@@ -352,7 +380,6 @@ async def refresh_if_needed(sid: str, session: Dict[str, Any]) -> Dict[str, Any]
 # `refresh_if_needed` only looks at the clock, so nothing ever refreshed and
 # the session stayed dead until the stored deadline finally passed. The fix is
 # to treat an upstream 401 itself as the signal, refresh once, and retry.
-_refresh_locks: Dict[str, asyncio.Lock] = {}
 
 
 async def _refresh_now(session: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -365,10 +392,7 @@ async def _refresh_now(session: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     sid = str(session.get('sid') or '')
     if not sid or not session.get('refresh_token'):
         return None
-    lock = _refresh_locks.get(sid)
-    if lock is None:
-        lock = _refresh_locks[sid] = asyncio.Lock()
-    async with lock:
+    async with _refresh_lock(sid):
         try:
             current = session_get(sid)
         except HTTPException:
@@ -3727,13 +3751,37 @@ async def stream(url: str, request: Request, kp_session: Optional[str] = Cookie(
     allowed = {'content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified', 'cache-control'}
     headers = {k: v for k, v in upstream.headers.items() if k.lower() in allowed}
     log_event('media', 'Stream opened', {'url': final_url, 'status': upstream.status_code, 'range': request.headers.get('range', '')})
+    try:
+        declared = int(upstream.headers.get('content-length') or 0)
+    except ValueError:
+        declared = 0
 
+    # "Stream opened" is written before a single byte moves, so a transfer that
+    # dies halfway used to leave a log full of successful 200s and no trace of
+    # the failure at all - which is exactly what a `fragLoadError` looks like
+    # from the player when the status itself was fine. Only departures from a
+    # clean, complete transfer are recorded.
     async def iterator():
+        sent = 0
+        outcome = 'complete'
         try:
             async for chunk in upstream.aiter_bytes(256 * 1024):
+                sent += len(chunk)
                 yield chunk
+        except (asyncio.CancelledError, GeneratorExit):
+            # The player walked away mid-fragment. Normal during a seek, but a
+            # burst of these is also what hls.js giving up on its own timeout
+            # looks like from this side, so they are worth counting.
+            outcome = 'aborted by client'
+            raise
+        except Exception as exc:
+            outcome = f'{type(exc).__name__}: {exc}'
+            raise
         finally:
             await upstream.aclose()
+            if outcome != 'complete' or (declared and sent != declared):
+                log_event('media', 'Stream transfer incomplete', {
+                    'url': final_url, 'sent': sent, 'declared': declared, 'outcome': outcome})
 
     return StreamingResponse(iterator(), status_code=upstream.status_code, headers=headers)
 

@@ -20,7 +20,7 @@ without changing the shipped code at all.
 
 ## Two kinds of file
 
-**Stub-DOM** (`harness.js`, `subs.js`, `misc.js`, `quality.js`): hand-rolled
+**Stub-DOM** (`harness.js`, `subs.js`, `misc.js`, `quality.js`, `hlserr.js`): hand-rolled
 fake `document`/`video` objects, just enough surface for the code path under
 test. Fast, no dependencies.
 
@@ -47,6 +47,7 @@ node harness.js  ../app.js
 node subs.js     ../app.js
 node misc.js     ../app.js
 node quality.js  ../app.js
+node hlserr.js   ../app.js
 node sections.js ../app.js
 node actions.js  ../app.js
 node episodes.js ../app.js
@@ -60,12 +61,12 @@ used to verify this suite after every change to `frontend/app.js`:
 docker run --rm -v "$PWD/frontend:/f:ro" -w /tmp node:20-alpine sh -c '
   cp -r /f ./frontend && cd frontend/tests
   npm install jsdom --silent --no-fund --no-audit
-  for s in harness.js subs.js misc.js quality.js sections.js actions.js episodes.js panel.js; do
+  for s in harness.js subs.js misc.js quality.js hlserr.js sections.js actions.js episodes.js panel.js; do
     echo "=== $s ==="; node "$s" ../app.js
   done'
 ```
 
-As of the last run: **312 checks, 0 failures** across all eight files.
+As of the last run: **340 checks, 0 failures** across all nine files.
 
 ## What each file covers
 
@@ -75,6 +76,7 @@ As of the last run: **312 checks, 0 failures** across all eight files.
 | `subs.js` | Subtitle mount/rebuild loop fix, per-track `shift`, language auto-selection, embedded-track menu listing |
 | `misc.js` | Remote OK-key-on-timeline fix (no false seek-to-0), shared label-building helpers (`pushLabelPart`/`truthyFlag`), `play()` promise rejection handling (AbortError silencing, NotAllowedError messaging) |
 | `quality.js` | Device-capability probing (HEVC/HDR/MSE) including the three-way "browser did not answer" case and the multi-spelling codec probe, what gets declared to KinoPub, the explicit device profile, quality-variant selection and ranking, stream-mode fallback on Direct-playback failure, fullscreen mode selection |
+| `hlserr.js` | The recovery ladder after an hls.js error: fatal network errors restart loading (with backoff, and a budget that a successfully buffered fragment resets), fatal media errors get `recoverMediaError`/`swapAudioCodec`, an unloadable playlist is not retried at all, exhausting the ladder falls back to relay once — except with a locally remuxed audio track, which is never traded away. Also that non-fatal noise is logged but not acted on, and that an error from an already-replaced stream is ignored |
 | `sections.js` | 3D as its own catalogue section, Фильмы/3D heading toggle, History section (day grouping, type filter incl. the "Все фильмы"/"Все эпизоды" aggregate tabs, per-filter paging), "Я смотрю" sidebar badge on startup, its Новые эпизоды/Мои сериалы toggle (two different endpoints, not two slices of one), real catalogue filters (genre/country/year/quality/sort, per-section state, reset), "Закладки" (folder list, folder contents, back navigation, resets when you leave and come back), "Подборки" (sort tabs, opening a collection, no pagination on the collection view), `route(name, subId)` correctly restoring a folder/collection - the fix for `history.back()` skipping past one, the kino.pub-style filter panel: two-handle range sliders driven from a remote (OK enters edit mode, OK swaps handle, arrows move, Back exits), debounced commit, focus surviving the panel rebuild |
 | `actions.js` | Details-screen Watch/Continue/Restart buttons, resumable-position heuristics, that a fresh title doesn't inherit the previous title's resume position |
 | `episodes.js` | Season-picker/episode-strip visibility rules: hidden for a single-file movie, flat strip (no season pills) for one season with multiple episodes, season pills only for genuinely multiple seasons. Also the "Серии:" episode-pill row — its own class rather than `.season-pill`, rebuilt per season, watched filled vs part-watched outlined |
