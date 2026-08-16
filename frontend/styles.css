@@ -185,7 +185,7 @@ body.auth-locked .sidebar,body.auth-locked .content-shell{visibility:hidden;poin
 .details-seasons-label{color:#8f98aa;font-size:15px;margin-right:4px}
 .season-pill,.episode-pill{border:1px solid #3b4558;background:transparent;color:#c8cfdd;border-radius:999px;min-width:44px;padding:7px 14px;font-size:15px}
 .season-pill:hover,.season-pill:focus,.episode-pill:hover,.episode-pill:focus{border-color:var(--green);color:#fff}
-.season-pill.active{background:var(--green);border-color:var(--green);color:#fff;font-weight:700}
+.season-pill.watched{background:var(--green);border-color:var(--green);color:#fff;font-weight:700}.season-pill.partial{border-color:#e0a33a;color:#f0c179}.season-pill.active{background:var(--green);border-color:var(--green);color:#fff;font-weight:700}
 .details-episodes-pills{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}.episode-pill{min-width:38px;padding:5px 11px;font-size:14px}.episode-pill.watched{background:var(--green);border-color:var(--green);color:#fff;font-weight:700}.episode-pill.partial{border-color:#e0a33a;color:#f0c179}.episode-pill.watched:hover,.episode-pill.watched:focus{border-color:#fff;color:#fff}.episode-strip{display:flex;gap:14px;padding-bottom:8px;transition:transform .32s ease}
 /* A true paged carousel, not a scroll-with-overlay-arrows: the strip only
    ever sits at an exact multiple of one page's width, so a page never ends
@@ -193,7 +193,7 @@ body.auth-locked .sidebar,body.auth-locked .content-shell{visibility:hidden;poin
    positioned over it) so they never sit on top of - and steal clicks from -
    the edge card. Dots below jump straight to a page. */
 .episode-carousel-outer{margin-bottom:8px}
-.episode-carousel{display:flex;align-items:stretch;gap:8px}
+.episode-carousel{display:flex;align-items:stretch;gap:8px;justify-content:space-between}
 .episode-viewport{flex:1;min-width:0;overflow:hidden}
 .episode-nav{flex:0 0 auto;width:38px;border:0;padding:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.06);color:#fff;border-radius:6px;transition:background-color .14s ease,transform .14s ease}
 .episode-nav svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}

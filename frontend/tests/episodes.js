@@ -22,6 +22,13 @@ global.KPApi = {
   audioHlsStatus:()=>new Promise(()=>{}), stopAudioHls:()=>Promise.resolve({}),
   history:()=>Promise.resolve({items:[]}), saveProgress:()=>Promise.resolve({}),
   imageProxyUrl:u=>u, streamProxyUrl:u=>u, hlsProxyUrl:u=>u, subtitleProxyUrl:u=>u,
+  // Echoes the requested media id back as `media.id`, same as the real
+  // backend does for a specific media_id request - lets the next-episode
+  // flow test below drive the actual play() promise chain instead of
+  // poking state by hand.
+  play:(itemId,mediaId)=>Promise.resolve({media:{id:mediaId||'a1'},
+    streams:[{url:'http://cdn/ep.mp4',source_type:'http',protocol:'http',codec:'h264',height:1080,quality:'1080p',file:'f'}],
+    selected:null,subtitles:[],audios:[],expected_tracks:0}),
 };
 window.KPApi = global.KPApi;
 
@@ -120,6 +127,42 @@ check('SxxEyy code shown for a real multi-season title',
 check('resume label includes the SxxEyy prefix',
   app.episodeLabel(SERIES, SERIES.seasons[1].episodes[0]), 'S02E01 · B1');
 
+console.log('--- season pills carry the same watched/partial signal as episode pills ---');
+// Season 1: one finished, one stopped mid-way, one never opened - "some
+// progress, not all of it" is exactly what episode-partial means one level up.
+// Season 2: everything finished. Season 3: nothing touched at all.
+const SEASONED = {
+  id: 's3', title: 'Другой сериал', poster: '', backdrop: '',
+  seasons: [
+    { number: 1, episodes: [
+      { id: 'p1', title: 'P1', season: 1, episode: 1 },
+      { id: 'p2', title: 'P2', season: 1, episode: 2 },
+      { id: 'p3', title: 'P3', season: 1, episode: 3 },
+    ]},
+    { number: 2, episodes: [
+      { id: 'p4', title: 'P4', season: 2, episode: 1 },
+      { id: 'p5', title: 'P5', season: 2, episode: 2 },
+    ]},
+    { number: 3, episodes: [{ id: 'p6', title: 'P6', season: 3, episode: 1 }] },
+  ],
+};
+app.state.detailsProgress = { items: [
+  { episode_id: 'p1', position: 1200, duration: 1200, completed: true },
+  { episode_id: 'p2', position: 400,  duration: 1200, completed: false },
+  { episode_id: 'p4', position: 1200, duration: 1200, completed: true },
+  { episode_id: 'p5', position: 1200, duration: 1200, completed: true },
+]};
+app.renderEpisodes(SEASONED);
+const seasonPillState = p => p.classList.contains('watched') ? 'watched'
+  : p.classList.contains('partial') ? 'partial' : 'none';
+check('season with a finished, a mid-way and an untouched episode reads as partial',
+  seasonPillState(qa('.season-pill')[0]), 'partial');
+check('season finished end to end reads as watched',
+  seasonPillState(qa('.season-pill')[1]), 'watched');
+check('season with no progress at all carries neither class',
+  seasonPillState(qa('.season-pill')[2]), 'none');
+app.state.detailsProgress = null;
+
 // The player's "next episode" button. The list it walks is the same flattened
 // season order the details screen renders, so the interesting cases are the two
 // ends of it and the seam between seasons.
@@ -178,5 +221,35 @@ app.state.settings = {};
 at(SERIES, SERIES.seasons[0].episodes[0].id);
 check('settings that never loaded are treated as off', app.autoplay(), false);
 
-console.log(failures ? `\n${failures} FAILURE(S)` : '\nAll checks passed');
-process.exit(failures ? 1 : 0);
+// The button (and autoplay) read state.episodeId, and only openUrl() ever sets
+// it. play() used to call updateNextEpisodeButton() twice, both times BEFORE
+// openUrl ran - so the button always reflected the *previous* episode, one
+// step behind reality. On a session's very first play that previous id is ''
+// (index -1, "not found"), which disabled the button even with a real next
+// episode sitting right there; it looked keyed to "has the next episode been
+// watched" only because normal sequential viewing made the off-by-one drift
+// land on the true last episode at exactly that point. Driving the real
+// play() promise chain (not just poking state.episodeId by hand, which is
+// what every check above this one does) is the only way to catch that class
+// of bug.
+console.log('--- next-episode button through a real play() call ---');
+const flushMicrotasks = () => new Promise(r => setTimeout(r, 0));
+
+(async () => {
+  app.state.settings = { autoplay_next: false, stream_mode: 'auto' };
+  app.state.episodeId = ''; // a fresh session: nothing has played yet
+
+  await app.play(SERIES, SERIES.seasons[0].episodes[0], 0);
+  await flushMicrotasks(); await flushMicrotasks();
+  check('first-ever play of a non-last episode leaves the button enabled',
+    nextBtn.disabled, false);
+  check('and it points at the real next episode, not the one just started',
+    app.nextEpisode() && app.nextEpisode().id, 'b1');
+
+  await app.play(SERIES, SERIES.seasons[1].episodes[0], 0);
+  await flushMicrotasks(); await flushMicrotasks();
+  check('playing the true last episode disables the button', nextBtn.disabled, true);
+
+  console.log(failures ? `\n${failures} FAILURE(S)` : '\nAll checks passed');
+  process.exit(failures ? 1 : 0);
+})();

@@ -1246,7 +1246,10 @@ function renderDetailsEpisodes(item){
    carousel.refresh(true);
   }
   for(var s=0;s<seasons.length;s++){
-   var pill=document.createElement('button');pill.className='focusable season-pill';pill.setAttribute('data-season',String(s));
+   var pill=document.createElement('button');
+   var seasonState=seasonWatchState(seasons[s].episodes);
+   pill.className='focusable season-pill'+(seasonState?' '+seasonState:'');
+   pill.setAttribute('data-season',String(s));
    pill.textContent=String(seasons[s].number);
    pill.onclick=(function(index){return function(){showSeason(index);};}(s));
    bar.appendChild(pill);
@@ -1297,6 +1300,21 @@ function episodeWatched(entry){
  if(row&&row.completed)return true;
  var kp=state.detailsWatching&&state.detailsWatching.episodes,id=String(entry&&entry.id||'');
  return !!(kp&&id&&kp[id]&&kp[id].watched);
+}
+function episodePartial(entry){return !episodeWatched(entry)&&!!resumableRow(episodeProgress(entry));}
+// Same two-state signal the episode pills already carry, rolled up to a
+// season: green once every episode in it is watched, outlined once anything
+// in it has been started - even a single mid-way episode - without the whole
+// season being done yet. A season with nothing touched gets neither.
+function seasonWatchState(episodes){
+ if(!episodes||!episodes.length)return '';
+ var any=false,all=true;
+ for(var i=0;i<episodes.length;i++){
+  var watched=episodeWatched(episodes[i]);
+  if(watched||episodePartial(episodes[i]))any=true;
+  if(!watched)all=false;
+ }
+ return all?'watched':(any?'partial':'');
 }
 // A row is worth resuming only in the middle: not at the very start, and not
 // once it is finished.
@@ -2123,7 +2141,16 @@ function playNextEpisode(){
  saveProgress();
  play(state.current,next,0);
 }
-function play(item,episode,startAt){$('playerLayer').classList.remove('live');enterPlayerFullscreen();state.playerResumePosition=Math.max(0,Number(startAt)||0);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);state.audioHlsJobId='';state.audioHlsPendingJobId='';if(!ensureSubscriptionForPlayback()){openSubscription();return;}state.audioHlsPollToken++;state.audioHlsPreparing=false;state.audioHlsActive=false;state.audioHlsOffset=0;state.audioHlsSelectedIndex=-1;state.playerAudioChoice='auto';state.playerOriginalDuration=0;state.hdrFellBack=false;state.hlsFellBack=false;state.current=item;state.episodeSeason=null;state.episodeNumber=null;$('playerTitle').textContent=item.title+(episode&&episode.title?' · '+episode.title:'');$('playerLayer').classList.remove('hidden');showPlayerControls();$('playerError').textContent='Получаем ссылку на видео…';updateNextEpisodeButton();var mediaId=episode&&(episode.media_id||episode.id);(state.capsSync||Promise.resolve()).catch(function(){}).then(function(){return KPApi.play(item.id,mediaId);}).then(function(result){var st=result.selected||((result.streams||[])[0]);if(!st||!st.url)throw new Error('Ссылка на видео не найдена');preparePlayerOptions(result,st);$('playerError').textContent='';var group=currentQualityGroup(),preferred=preferredModeFor(group),initialUrl=streamUrlForGroup(group,preferred)||st.url;state.hdrAttempt=preferred==='direct'&&isHevcGroup(group);state.episodeSeason=(result.media&&result.media.season)||null;state.episodeNumber=(result.media&&result.media.episode)||null;updateNextEpisodeButton();openUrl(initialUrl,preferred,(result.media&&result.media.id)||mediaId||'');}).catch(function(err){$('playerError').textContent='Не удалось получить поток: '+(err&&err.message?err.message:String(err));KPApi.report('Resolve stream failed',{item_id:item.id,error:String(err)},'media').catch(function(){});});}
+function play(item,episode,startAt){$('playerLayer').classList.remove('live');enterPlayerFullscreen();state.playerResumePosition=Math.max(0,Number(startAt)||0);if(state.audioHlsJobId)stopAudioHlsJob(state.audioHlsJobId);if(state.audioHlsPendingJobId)stopAudioHlsJob(state.audioHlsPendingJobId);state.audioHlsJobId='';state.audioHlsPendingJobId='';if(!ensureSubscriptionForPlayback()){openSubscription();return;}state.audioHlsPollToken++;state.audioHlsPreparing=false;state.audioHlsActive=false;state.audioHlsOffset=0;state.audioHlsSelectedIndex=-1;state.playerAudioChoice='auto';state.playerOriginalDuration=0;state.hdrFellBack=false;state.hlsFellBack=false;state.current=item;state.episodeSeason=null;state.episodeNumber=null;$('playerTitle').textContent=item.title+(episode&&episode.title?' · '+episode.title:'');$('playerLayer').classList.remove('hidden');showPlayerControls();$('playerError').textContent='Получаем ссылку на видео…';
+ // Disabled, not left showing whatever the *previous* episode's button state
+ // was: state.episodeId (what nextEpisodeEntry() reads) is only ever set by
+ // openUrl(), which has not run yet for this episode. Rendering now would
+ // answer with last episode's position, not this one's - on a session's very
+ // first play that stale id is '', which disabled a real next episode
+ // outright, and on every play after the first it pointed one entry short,
+ // silently turning "next episode" into "replay this one".
+ var nextEpBtn=$('nextEpisode');if(nextEpBtn){nextEpBtn.disabled=true;nextEpBtn.classList.add('is-disabled');}
+ var mediaId=episode&&(episode.media_id||episode.id);(state.capsSync||Promise.resolve()).catch(function(){}).then(function(){return KPApi.play(item.id,mediaId);}).then(function(result){var st=result.selected||((result.streams||[])[0]);if(!st||!st.url)throw new Error('Ссылка на видео не найдена');preparePlayerOptions(result,st);$('playerError').textContent='';var group=currentQualityGroup(),preferred=preferredModeFor(group),initialUrl=streamUrlForGroup(group,preferred)||st.url;state.hdrAttempt=preferred==='direct'&&isHevcGroup(group);state.episodeSeason=(result.media&&result.media.season)||null;state.episodeNumber=(result.media&&result.media.episode)||null;openUrl(initialUrl,preferred,(result.media&&result.media.id)||mediaId||'');updateNextEpisodeButton();}).catch(function(err){$('playerError').textContent='Не удалось получить поток: '+(err&&err.message?err.message:String(err));KPApi.report('Resolve stream failed',{item_id:item.id,error:String(err)},'media').catch(function(){});});}
 function switchQuality(index){var group=state.playerStreams[Number(index)];if(!group)return;state.playerQualityIndex=String(index);
  // In HLS mode every entry points at the same master playlist, so reloading
  // it would re-buffer and re-seek for nothing. Move the hls.js level instead:
