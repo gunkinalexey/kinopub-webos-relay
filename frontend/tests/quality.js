@@ -113,7 +113,7 @@ setup({canPlay:{[H264]:'probably',[H2644K]:'probably'},mse:{[H264]:true,[H2644K]
 check('falls back to the best H.264', picked(), '1080p h264');
 check('uses hls for H.264', app.mode(app.group()), 'hls');
 check('does not claim HEVC to KinoPub', app.reported().hevc, false);
-check('the undecodable 4K HEVC entry is not offered at all', app.qualityMenu(), ['1080p · H264 · HLS','720p · H264 · HLS']);
+check('the undecodable 4K HEVC entry is not offered at all', app.qualityMenu(), ['1080','720']);
 
 console.log('--- HEVC only through MSE (no direct decode) ---');
 setup({canPlay:{[H264]:'probably'},mse:{[HEVC]:true,[HEVC4K]:true,[H264]:true},media:{}});
