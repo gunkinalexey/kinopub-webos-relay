@@ -2118,6 +2118,28 @@ function updateNextEpisodeButton(){
  btn.classList.toggle('is-disabled',!next);
  var label=next?('Следующая серия'+(next.title?': '+next.title:'')):'Это последняя серия';
  btn.setAttribute('title',label);btn.setAttribute('aria-label',label);
+ if(!next)reportNoNextEpisode();
+}
+// Кнопка гаснет по двум совершенно разным причинам: серия действительно
+// последняя - и это нормально, - либо играющую серию не удалось найти в
+// списке, и тогда пользователь видит "переключение не работает". Снаружи они
+// неотличимы, а воспроизвести второй случай на синтетических данных не
+// выходит: он проявляется на настоящих сериалах. Поэтому в лог уходит только
+// аномалия - когда список есть, а текущей серии в нём нет.
+function reportNoNextEpisode(){
+ var item=state.current;
+ if(!item||item.live||!state.episodeId)return;
+ var list=playerEpisodeList();
+ if(currentEpisodeIndex(list)>=0)return;   // честный конец сериала, не аномалия
+ KPApi.report('Next episode unavailable: playing episode not in list',{
+  item_id:item.id,
+  playing_episode_id:String(state.episodeId),
+  list_length:list.length,
+  list_ids:list.slice(0,40).map(function(e){return String(e.media_id||e.id||'');}),
+  has_seasons:!!(item.seasons&&item.seasons.length),
+  seasons_count:item.seasons?item.seasons.length:0,
+  media_length:item.media?item.media.length:0
+ },'media').catch(function(){});
 }
 // Runs when a video reaches its end. The setting has been in the UI and in
 // the database all along without a single reader - this is the reader.
